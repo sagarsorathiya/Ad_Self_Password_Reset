@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Settings — AD Password Portal</title>
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <nav id="navbar"></nav>
+
+        <main class="page-wrapper hidden" id="content">
+            <div class="card card-wide fade-in" style="margin: 0 auto;">
+                <div class="section-header text-center">
+                    <h1 class="section-title" id="pageTitle">Set Up Account Recovery</h1>
+                    <p class="section-subtitle" id="pageSubtitle">Complete both steps so you can reset your password if you ever forget it.</p>
+                </div>
+
+                <div class="stepper" id="stepper">
+                    <div class="step" data-step="1"><span class="step-number">1</span><span class="step-label">Security Questions</span></div>
+                    <div class="step-connector"></div>
+                    <div class="step" data-step="2"><span class="step-number">2</span><span class="step-label">Authenticator</span></div>
+                    <div class="step-connector"></div>
+                    <div class="step" data-step="3"><span class="step-number">3</span><span class="step-label">Done</span></div>
+                </div>
+
+                <!-- Security settings overview (enrolled users) -->
+                <section id="manageView" class="hidden">
+                    <div class="status-list">
+                        <div class="status-item" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <strong>Security questions</strong>
+                                <span class="badge badge-success">Configured</span>
+                            </div>
+                            <ol class="text-sm text-muted" id="currentQuestions" style="padding-left: 1.25rem;"></ol>
+                            <button type="button" class="btn btn-secondary btn-sm" id="updateQuestionsBtn">Update questions or answers</button>
+                        </div>
+                        <div class="status-item" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <strong>Authenticator app</strong>
+                                <span class="badge badge-success">Active</span>
+                            </div>
+                            <p class="text-sm text-muted">Got a new phone or reinstalled your authenticator app? Link the new device here. Your current device keeps working until the new one is verified.</p>
+                            <div class="form-group reauth-group" id="totpReauthGroup" style="margin-bottom: 0;">
+                                <label class="form-label" for="totpCurrentPassword">Current Windows password</label>
+                                <div class="password-wrapper">
+                                    <input class="form-input" type="password" id="totpCurrentPassword" autocomplete="current-password" maxlength="256">
+                                    <button type="button" class="password-toggle" aria-label="Show password">👁️</button>
+                                </div>
+                                <div class="form-error"></div>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="replaceTotpBtn">Replace authenticator (new device)</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Step 1: Security Questions -->
+                <section id="step1" class="hidden">
+                    <div id="sqExistingAlert" class="alert alert-info hidden">
+                        <span class="alert-icon">ℹ️</span>
+                        <span>Your current questions are pre-selected. Answers are stored encrypted and can't be displayed — leave an answer blank to keep it, or type a new one to change it.</span>
+                    </div>
+                    <form id="sqForm" novalidate>
+                        <div id="sqFields"></div>
+                        <div class="form-group hidden reauth-group" id="sqReauthGroup">
+                            <label class="form-label" for="sqCurrentPassword">Current Windows password</label>
+                            <div class="password-wrapper">
+                                <input class="form-input" type="password" id="sqCurrentPassword" autocomplete="current-password" maxlength="256">
+                                <button type="button" class="password-toggle" aria-label="Show password">👁️</button>
+                            </div>
+                            <p class="form-hint">Required to change existing recovery settings.</p>
+                            <div class="form-error"></div>
+                        </div>
+                        <div class="btn-row space-between">
+                            <button type="button" class="btn btn-ghost hidden" id="sqCancelBtn">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="sqSubmitBtn">Save &amp; Continue</button>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- Step 2: TOTP -->
+                <section id="step2" class="hidden">
+                    <div id="totpSetup">
+                        <div id="totpReplaceAlert" class="alert alert-warning hidden">
+                            <span class="alert-icon">⚠️</span>
+                            <span>Your current authenticator stays active until you verify the new device below. After that, the old device stops working.</span>
+                        </div>
+                        <ol class="text-sm text-muted mb-6" style="padding-left: 1.25rem;">
+                            <li>Open Microsoft Authenticator, Google Authenticator, or a compatible app.</li>
+                            <li>Scan the QR code below, or enter the key manually.</li>
+                            <li>Enter the 6-digit code shown in the app to confirm.</li>
+                        </ol>
+                        <div class="qr-container mb-4">
+                            <img id="qrImage" alt="Authenticator QR code">
+                        </div>
+                        <p class="form-label text-center">Can't scan? Enter this key manually:</p>
+                        <div class="qr-manual-key mb-6" id="manualKey"></div>
+
+                        <form id="totpForm" novalidate>
+                            <div class="form-group">
+                                <label class="form-label" for="totpCode">Verification code</label>
+                                <input class="form-input otp-input" type="text" id="totpCode" inputmode="numeric"
+                                       autocomplete="one-time-code" maxlength="6" placeholder="000000">
+                                <div class="form-error"></div>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-block" id="totpVerifyBtn">Verify &amp; Enable</button>
+                            <button type="button" class="btn btn-ghost btn-block mt-4 hidden" id="totpCancelBtn">Cancel</button>
+                        </form>
+                    </div>
+                </section>
+
+                <!-- Step 3: Done -->
+                <section id="step3" class="hidden text-center">
+                    <div class="empty-state" style="padding-top: 1rem; padding-bottom: 1rem;">
+                        <div class="empty-state-icon" style="opacity: 1;">🎉</div>
+                        <h2 class="empty-state-title">You're all set!</h2>
+                        <p class="empty-state-text">
+                            You can now reset your password from the sign-in page using your security questions or authenticator app.
+                        </p>
+                    </div>
+                    <a href="/dashboard.html" class="btn btn-primary btn-lg">Go to Dashboard</a>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/enroll.js"></script>
+</body>
+</html>

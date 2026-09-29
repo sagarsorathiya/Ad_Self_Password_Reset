@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign In — AD Password Portal</title>
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <main class="page-centered">
+            <div class="card card-auth fade-in">
+                <div class="logo-section">
+                    <img src="/assets/logo.svg" alt="" width="64" height="64" class="logo-img">
+                    <h1 class="logo-title">Password Self-Service</h1>
+                    <p class="logo-subtitle">Sign in with your network (Windows) account</p>
+                </div>
+
+                <div id="loginAlert" class="alert alert-warning hidden" role="alert">
+                    <span class="alert-icon">⚠️</span>
+                    <span id="loginAlertText"></span>
+                </div>
+
+                <form id="loginForm" novalidate>
+                    <div class="form-group">
+                        <label class="form-label" for="username">Username</label>
+                        <input class="form-input" type="text" id="username" name="username"
+                               autocomplete="username" autofocus maxlength="256">
+                        <div class="form-error"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="password">Password</label>
+                        <div class="password-wrapper">
+                            <input class="form-input" type="password" id="password" name="password"
+                                   placeholder="Enter your password" autocomplete="current-password" maxlength="256">
+                            <button type="button" class="password-toggle" aria-label="Show password">👁️</button>
+                        </div>
+                        <div class="form-error"></div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-block btn-lg" id="loginBtn">Sign in</button>
+                </form>
+
+                <div class="auth-footer">
+                    Forgot your password? <a href="/reset.html">Reset it here</a>
+                </div>
+            </div>
+            <p class="legal-notice">Authorized use only. Activity on this system is logged and monitored.</p>
+        </main>
+    </div>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/login.js"></script>
+</body>
+</html>

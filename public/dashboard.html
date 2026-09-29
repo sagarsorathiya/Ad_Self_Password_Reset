@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard — AD Password Portal</title>
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <nav id="navbar"></nav>
+
+        <main class="page-wrapper hidden" id="content">
+            <div class="section-header fade-in">
+                <h1 class="section-title" id="welcomeTitle">Welcome</h1>
+                <p class="section-subtitle">Manage your password and account recovery options.</p>
+            </div>
+
+            <div class="dashboard-grid fade-in">
+                <section class="dashboard-card">
+                    <div class="dashboard-card-header">
+                        <h2 class="dashboard-card-title">Account Recovery</h2>
+                        <span class="dashboard-card-icon">🛡️</span>
+                    </div>
+                    <ul class="status-list">
+                        <li class="status-item">
+                            <span>Security Questions</span>
+                            <span id="sqBadge" class="badge"></span>
+                        </li>
+                        <li class="status-item">
+                            <span>Authenticator App (TOTP)</span>
+                            <span id="totpBadge" class="badge"></span>
+                        </li>
+                        <li class="status-item">
+                            <span>Overall Status</span>
+                            <span id="enrolledBadge" class="badge"></span>
+                        </li>
+                    </ul>
+                    <a href="/enroll.html" class="btn btn-secondary btn-block mt-6">Manage Security Settings</a>
+                </section>
+
+                <section class="dashboard-card">
+                    <div class="dashboard-card-header">
+                        <h2 class="dashboard-card-title">Quick Actions</h2>
+                        <span class="dashboard-card-icon">⚡</span>
+                    </div>
+                    <div class="action-list">
+                        <a href="/change-password.html" class="btn btn-primary btn-block">Change my password</a>
+                        <a href="/admin.html" class="btn btn-secondary btn-block hidden" id="adminLink">Open administration</a>
+                    </div>
+                    <p class="text-sm text-muted mt-6">
+                        Forgot your password later? Use the <strong>Forgot Password</strong> link on the sign-in page
+                        and verify with your security questions or authenticator app.
+                    </p>
+                </section>
+
+                <section class="dashboard-card">
+                    <div class="dashboard-card-header">
+                        <h2 class="dashboard-card-title">Account</h2>
+                        <span class="dashboard-card-icon">👤</span>
+                    </div>
+                    <ul class="status-list">
+                        <li class="status-item"><span>Username</span><strong id="infoUsername"></strong></li>
+                        <li class="status-item"><span>Display name</span><strong id="infoDisplayName"></strong></li>
+                        <li class="status-item"><span>Email</span><strong id="infoEmail"></strong></li>
+                    </ul>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/dashboard.js"></script>
+</body>
+</html>

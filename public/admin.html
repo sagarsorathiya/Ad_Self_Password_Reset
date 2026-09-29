@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — AD Password Portal</title>
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <nav id="navbar"></nav>
+
+        <main class="page-wrapper hidden" id="content">
+            <div class="section-header fade-in">
+                <h1 class="section-title">Administration</h1>
+                <p class="section-subtitle">Monitor enrollment, manage users, and review security events.</p>
+            </div>
+
+            <div class="stats-grid fade-in">
+                <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-value" id="statTotal">–</div><div class="stat-label">Total Users</div></div>
+                <div class="stat-card"><div class="stat-icon">✅</div><div class="stat-value" id="statEnrolled">–</div><div class="stat-label">Enrolled</div></div>
+                <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" id="statPending">–</div><div class="stat-label">Pending Enrollment</div></div>
+                <div class="stat-card"><div class="stat-icon">🔒</div><div class="stat-value" id="statLocked">–</div><div class="stat-label">Locked</div></div>
+            </div>
+
+            <div class="filter-tabs mb-6" role="tablist" id="mainTabs" style="display: inline-flex;">
+                <button class="filter-tab active" role="tab" data-tab="users">Users</button>
+                <button class="filter-tab" role="tab" data-tab="audit">Audit Log</button>
+                <button class="filter-tab" role="tab" data-tab="questions">Security Questions</button>
+            </div>
+
+            <!-- Users -->
+            <section id="tab-users">
+                <div class="toolbar">
+                    <div class="toolbar-left">
+                        <input class="form-input toolbar-search" type="search" id="userSearch" placeholder="Search name, username, email" maxlength="100">
+                        <div class="filter-tabs" id="userFilters">
+                            <button class="filter-tab active" data-filter="all">All</button>
+                            <button class="filter-tab" data-filter="enrolled">Enrolled</button>
+                            <button class="filter-tab" data-filter="pending">Pending</button>
+                            <button class="filter-tab" data-filter="locked">Locked</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                <th>Email</th>
+                                <th>Status</th>
+                                <th>Questions</th>
+                                <th>TOTP</th>
+                                <th>Failed</th>
+                                <th>Last Activity</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersBody"></tbody>
+                    </table>
+                    <div class="pagination" id="usersPagination"></div>
+                </div>
+            </section>
+
+            <!-- Audit log -->
+            <section id="tab-audit" class="hidden">
+                <form class="toolbar" id="auditFilters">
+                    <div class="toolbar-left">
+                        <input class="form-input toolbar-search" type="text" id="auditUsername" placeholder="Exact username" maxlength="100">
+                        <select class="form-select" id="auditAction" style="width: auto;">
+                            <option value="">All actions</option>
+                            <option value="login">Login</option>
+                            <option value="logout">Logout</option>
+                            <option value="password_change">Password change</option>
+                            <option value="password_reset_verify">Reset verification</option>
+                            <option value="password_reset">Password reset</option>
+                            <option value="enrollment">Enrollment</option>
+                            <option value="enrollment_reset">Enrollment reset</option>
+                            <option value="totp_replaced">Authenticator replaced</option>
+                            <option value="user_locked">User locked</option>
+                            <option value="user_unlocked">User unlocked</option>
+                            <option value="question_added">Question added</option>
+                            <option value="question_updated">Question updated</option>
+                        </select>
+                        <input class="form-input" type="date" id="auditStart" aria-label="Start date" style="width: auto;">
+                        <input class="form-input" type="date" id="auditEnd" aria-label="End date" style="width: auto;">
+                    </div>
+                    <div class="toolbar-left">
+                        <button type="reset" class="btn btn-ghost btn-sm">Clear</button>
+                        <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+                    </div>
+                </form>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Method</th>
+                                <th>Result</th>
+                                <th>IP Address</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="auditBody"></tbody>
+                    </table>
+                    <div class="pagination" id="auditPagination"></div>
+                </div>
+            </section>
+
+            <!-- Security questions -->
+            <section id="tab-questions" class="hidden">
+                <div class="toolbar">
+                    <p class="text-sm text-muted">Users choose 3 of the active questions during enrollment. Deactivating a question does not affect users who already selected it.</p>
+                    <button type="button" class="btn btn-primary btn-sm" id="addQuestionBtn">+ Add Question</button>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Order</th>
+                                <th>Question</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="questionsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/admin.js"></script>
+</body>
+</html>
