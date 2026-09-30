@@ -35,7 +35,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 | Enrollment | 3 security questions (answers hashed with bcrypt) and an authenticator app (QR code or manual key). |
 | Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes. |
 | Change password | For signed-in users. The current password is checked against AD. |
-| Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, audit log viewer, security question management. |
+| Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, audit log viewer, security question management, password exception list (blocked words). |
 | Security | Rate limiting, account lockout, TOTP replay protection, refresh-token revocation, audit log, CSP/Helmet. |
 
 ## 2. Architecture
@@ -158,7 +158,7 @@ CREATE DATABASE ad_password_reset OWNER portal_user;
 
 Then set `PG_USER=portal_user` and run `npm run db:init`. The schema is idempotent, and re-running it also applies new columns after an upgrade. For the integration tests, `portal_user` also needs `ALTER ROLE portal_user CREATEDB;`, or create `ad_password_reset_test` owned by `portal_user` yourself.
 
-Tables: `users`, `security_questions`, `user_security_answers`, `audit_log`, `used_reset_tokens`.
+Tables: `users`, `security_questions`, `user_security_answers`, `audit_log`, `used_reset_tokens`, `password_exceptions`.
 
 ## 7. Intranet deployment (Windows Server)
 
@@ -248,6 +248,7 @@ Members of `AD_ADMIN_GROUP` see **Admin** in the navigation bar.
 - **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers and authenticator, which you'd use for a lost phone. They must enroll again at their next sign-in.
 - **Audit Log:** filter by exact username, action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent.
 - **Security Questions:** add, edit, reorder, deactivate. Deactivating a question hides it from new enrollments; existing users keep it.
+- **Password Exceptions:** words or phrases that new passwords (change and reset) may not use. *Contains* blocks any password that includes the entry; *Exact* blocks only that exact password. Matching ignores case and common look-alikes (`@`→a, `0`→o, `1`→i/l, `3`→e, `$`/`5`→s, `7`→t, `4`→a), so `company` also blocks `C0mp@ny2026`. Entries can be edited, deactivated or removed and apply immediately, in addition to the domain password policy.
 
 Help-desk procedure for a user who lost their phone: check the user's identity by your normal process → **Reset Enrollment** → the user signs in (or you reset the AD password in ADUC) → the user enrolls again.
 
@@ -304,6 +305,8 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | GET | `/api/admin/audit-log` | admin | `?page&limit&username&action&startDate&endDate` |
 | GET/POST | `/api/admin/questions` | admin | POST `{ questionText, sortOrder? }` |
 | PUT | `/api/admin/questions/:id` | admin | `{ questionText?, isActive?, sortOrder? }` |
+| GET/POST | `/api/admin/password-exceptions` | admin | POST `{ term, matchType?: 'contains'\|'exact' }` |
+| PUT/DELETE | `/api/admin/password-exceptions/:id` | admin | PUT `{ term?, matchType?, isActive? }` |
 
 ## 12. Testing
 

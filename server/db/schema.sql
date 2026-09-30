@@ -73,6 +73,18 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAUL
 -- New authenticator awaiting verification (AES-256-GCM encrypted); the active one keeps working meanwhile
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_secret TEXT;
 
+-- Admin-managed words/phrases that new passwords may not contain (or equal)
+CREATE TABLE IF NOT EXISTS password_exceptions (
+    id SERIAL PRIMARY KEY,
+    term VARCHAR(128) NOT NULL,
+    match_type VARCHAR(10) NOT NULL DEFAULT 'contains' CHECK (match_type IN ('contains', 'exact')),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by VARCHAR(100),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_password_exceptions_term ON password_exceptions (LOWER(term));
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_audit_log_username ON audit_log(username);

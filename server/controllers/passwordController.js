@@ -6,6 +6,7 @@ const config = require('../config/default');
 const db = require('../config/db');
 const ldapService = require('../services/ldapService');
 const totpService = require('../services/totpService');
+const passwordExceptionService = require('../services/passwordExceptionService');
 const { logAudit } = require('./authController');
 
 const INCORRECT_ANSWERS_MESSAGE = 'One or more answers are incorrect. Please try again.';
@@ -58,6 +59,12 @@ async function changePassword(req, res) {
                 success: false,
                 message: 'New password must be different from the current password.',
             });
+        }
+
+        const violation = await passwordExceptionService.findViolation(newPassword);
+        if (violation) {
+            await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, false, 'Blocked by password exception list');
+            return res.status(400).json({ success: false, message: exceptionMessage(violation) });
         }
 
         // Change password in AD (verifies current password first)
@@ -508,6 +515,13 @@ async function setPassword(req, res) {
             });
         }
 
+        // Checked before claiming the token so the user can retry with another password
+        const violation = await passwordExceptionService.findViolation(newPassword);
+        if (violation) {
+            await logAudit(decoded.userId, decoded.username, 'password_reset', decoded.method || 'unknown', req, false, 'Blocked by password exception list');
+            return res.status(400).json({ success: false, message: exceptionMessage(violation) });
+        }
+
         // Claim the token atomically so concurrent requests cannot both use it
         const claim = await db.query(
             `INSERT INTO used_reset_tokens (token_jti, user_id, expires_at) VALUES ($1, $2, $3)
@@ -566,6 +580,12 @@ async function setPassword(req, res) {
 }
 
 // ---- Helper functions ----
+
+function exceptionMessage({ term, match_type: matchType }) {
+    return matchType === 'exact'
+        ? 'This password is not allowed by your organization. Please choose a different password.'
+        : `The new password must not contain "${term}" (or a look-alike such as letters replaced by numbers or symbols). Please choose a different password.`;
+}
 
 /**
  * Generate a single-use reset token (JWT with JTI).

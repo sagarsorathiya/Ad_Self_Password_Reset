@@ -28,6 +28,7 @@
                 <button class="filter-tab active" role="tab" data-tab="users">Users</button>
                 <button class="filter-tab" role="tab" data-tab="audit">Audit Log</button>
                 <button class="filter-tab" role="tab" data-tab="questions">Security Questions</button>
+                <button class="filter-tab" role="tab" data-tab="exceptions">Password Exceptions</button>
             </div>
 
             <!-- Users -->
@@ -82,6 +83,9 @@
                             <option value="user_unlocked">User unlocked</option>
                             <option value="question_added">Question added</option>
                             <option value="question_updated">Question updated</option>
+                            <option value="password_exception_added">Password exception added</option>
+                            <option value="password_exception_updated">Password exception updated</option>
+                            <option value="password_exception_deleted">Password exception removed</option>
                         </select>
                         <input class="form-input" type="date" id="auditStart" aria-label="Start date" style="width: auto;">
                         <input class="form-input" type="date" id="auditEnd" aria-label="End date" style="width: auto;">
@@ -127,6 +131,29 @@
                             </tr>
                         </thead>
                         <tbody id="questionsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Password exceptions -->
+            <section id="tab-exceptions" class="hidden">
+                <div class="toolbar">
+                    <p class="text-sm text-muted">New passwords (change and reset) are rejected if they contain or equal an active entry. Matching ignores case and common look-alikes such as @ for a or 0 for o. These rules apply in addition to the domain password policy.</p>
+                    <button type="button" class="btn btn-primary btn-sm" id="addExceptionBtn">+ Add Exception</button>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Word or Phrase</th>
+                                <th>Match</th>
+                                <th>Status</th>
+                                <th>Added By</th>
+                                <th>Updated</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="exceptionsBody"></tbody>
                     </table>
                 </div>
             </section>

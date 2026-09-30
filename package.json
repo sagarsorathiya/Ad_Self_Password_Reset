@@ -1,7 +1,7 @@
 {
   "name": "ad_self_password_reset",
   "version": "1.0.0",
-  "description": "",
+  "description": "Self-service password change and reset portal for Active Directory, with security questions and authenticator app (TOTP) verification, admin panel and audit log. Node.js, Express, PostgreSQL, LDAPS/StartTLS.",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
@@ -11,7 +11,18 @@
     "test:unit": "node --test \"test/unit/*.test.js\"",
     "test:integration": "node --test --test-concurrency=1 \"test/integration/*.test.js\""
   },
-  "keywords": [],
+  "keywords": [
+    "active-directory",
+    "ldap",
+    "password-reset",
+    "self-service",
+    "sspr",
+    "totp",
+    "mfa",
+    "express",
+    "postgresql",
+    "intranet"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",

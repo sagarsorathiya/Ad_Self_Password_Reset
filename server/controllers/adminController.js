@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { MATCH_TYPES } = require('../services/passwordExceptionService');
 const { logAudit } = require('./authController');
 
 /**
@@ -420,6 +421,139 @@ async function resetEnrollment(req, res) {
     }
 }
 
+/**
+ * GET /api/admin/password-exceptions
+ * List all words/phrases that are not allowed in new passwords.
+ */
+async function getPasswordExceptions(req, res) {
+    try {
+        const result = await db.query(
+            `SELECT id, term, match_type, is_active, created_by, created_at, updated_at
+             FROM password_exceptions ORDER BY LOWER(term) ASC`
+        );
+        res.json({ success: true, data: result.rows });
+    } catch (err) {
+        console.error('[Admin] Get password exceptions error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to load password exceptions.' });
+    }
+}
+
+function validateException({ term, matchType }, partial) {
+    if (term !== undefined || !partial) {
+        if (typeof term !== 'string' || term.trim().length < 3 || term.trim().length > 128) {
+            return 'The word or phrase must be 3 to 128 characters long.';
+        }
+    }
+    if (matchType !== undefined && !MATCH_TYPES.includes(matchType)) {
+        return 'Match type must be "contains" or "exact".';
+    }
+    return null;
+}
+
+/**
+ * POST /api/admin/password-exceptions
+ * Body: { term, matchType?: 'contains' | 'exact' }
+ */
+async function addPasswordException(req, res) {
+    try {
+        const error = validateException(req.body, false);
+        if (error) return res.status(400).json({ success: false, message: error });
+
+        const term = req.body.term.trim();
+        const result = await db.query(
+            `INSERT INTO password_exceptions (term, match_type, created_by) VALUES ($1, $2, $3)
+             RETURNING id, term, match_type, is_active, created_by, created_at, updated_at`,
+            [term, req.body.matchType || 'contains', req.user.username]
+        );
+
+        await logAudit(req.user.userId, req.user.username, 'password_exception_added', null, req, true, term);
+
+        res.status(201).json({ success: true, data: result.rows[0], message: 'Password exception added.' });
+    } catch (err) {
+        if (err.code === '23505') {
+            return res.status(409).json({ success: false, message: 'This word or phrase is already in the list.' });
+        }
+        console.error('[Admin] Add password exception error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to add password exception.' });
+    }
+}
+
+/**
+ * PUT /api/admin/password-exceptions/:id
+ * Body: { term?, matchType?, isActive? }
+ */
+async function updatePasswordException(req, res) {
+    try {
+        const id = parseInt(req.params.id, 10);
+        const { term, matchType, isActive } = req.body;
+
+        const error = validateException(req.body, true);
+        if (error) return res.status(400).json({ success: false, message: error });
+        if (isActive !== undefined && typeof isActive !== 'boolean') {
+            return res.status(400).json({ success: false, message: 'The "isActive" field must be true or false.' });
+        }
+
+        const updates = [];
+        const params = [];
+        if (term !== undefined) {
+            params.push(term.trim());
+            updates.push(`term = $${params.length}`);
+        }
+        if (matchType !== undefined) {
+            params.push(matchType);
+            updates.push(`match_type = $${params.length}`);
+        }
+        if (isActive !== undefined) {
+            params.push(isActive);
+            updates.push(`is_active = $${params.length}`);
+        }
+        if (updates.length === 0) {
+            return res.status(400).json({ success: false, message: 'No updates provided.' });
+        }
+
+        params.push(id);
+        const result = await db.query(
+            `UPDATE password_exceptions SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${params.length}
+             RETURNING id, term, match_type, is_active, created_by, created_at, updated_at`,
+            params
+        );
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Password exception not found.' });
+        }
+
+        await logAudit(req.user.userId, req.user.username, 'password_exception_updated', null, req, true,
+            `Updated password exception #${id}: ${result.rows[0].term}`);
+
+        res.json({ success: true, data: result.rows[0], message: 'Password exception updated.' });
+    } catch (err) {
+        if (err.code === '23505') {
+            return res.status(409).json({ success: false, message: 'This word or phrase is already in the list.' });
+        }
+        console.error('[Admin] Update password exception error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to update password exception.' });
+    }
+}
+
+/**
+ * DELETE /api/admin/password-exceptions/:id
+ */
+async function deletePasswordException(req, res) {
+    try {
+        const id = parseInt(req.params.id, 10);
+        const result = await db.query('DELETE FROM password_exceptions WHERE id = $1 RETURNING term', [id]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Password exception not found.' });
+        }
+
+        await logAudit(req.user.userId, req.user.username, 'password_exception_deleted', null, req, true, result.rows[0].term);
+
+        res.json({ success: true, message: 'Password exception removed.' });
+    } catch (err) {
+        console.error('[Admin] Delete password exception error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to remove password exception.' });
+    }
+}
+
 module.exports = {
     getUsers,
     getStats,
@@ -429,4 +563,8 @@ module.exports = {
     addQuestion,
     updateQuestion,
     resetEnrollment,
+    getPasswordExceptions,
+    addPasswordException,
+    updatePasswordException,
+    deletePasswordException,
 };

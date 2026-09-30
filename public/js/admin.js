@@ -25,13 +25,14 @@
             t.classList.toggle('active', active);
             t.setAttribute('aria-selected', String(active));
         });
-        ['users', 'audit', 'questions'].forEach((n) => {
+        ['users', 'audit', 'questions', 'exceptions'].forEach((n) => {
             document.getElementById(`tab-${n}`).classList.toggle('hidden', n !== name);
         });
         if (!loadedTabs.has(name)) {
             loadedTabs.add(name);
             if (name === 'audit') loadAudit();
             if (name === 'questions') loadQuestions();
+            if (name === 'exceptions') loadExceptions();
         }
     }
 
@@ -340,6 +341,134 @@
 
     function nextSortOrder() {
         return questionsCache.reduce((max, q) => Math.max(max, Number(q.sort_order) || 0), 0) + 1;
+    }
+
+    // ---- Password exceptions ----
+
+    const exceptionsBody = document.getElementById('exceptionsBody');
+    let exceptionsCache = [];
+
+    document.getElementById('addExceptionBtn').addEventListener('click', () => openExceptionModal());
+
+    async function loadExceptions() {
+        setTableMessage(exceptionsBody, 6, 'Loading...');
+        try {
+            const { data } = await api('GET', '/api/admin/password-exceptions');
+            exceptionsCache = data;
+            renderExceptions();
+        } catch (err) {
+            setTableMessage(exceptionsBody, 6, err.message);
+        }
+    }
+
+    function renderExceptions() {
+        if (exceptionsCache.length === 0) {
+            setTableMessage(exceptionsBody, 6, 'No password exceptions defined.');
+            return;
+        }
+        exceptionsBody.innerHTML = exceptionsCache.map((x) => `
+            <tr>
+                <td style="white-space: normal;"><strong>${escapeHtml(x.term)}</strong></td>
+                <td>${x.match_type === 'exact' ? 'Exact password' : 'Contains'}</td>
+                <td>${x.is_active
+                    ? '<span class="badge badge-success">Active</span>'
+                    : '<span class="badge badge-warning">Inactive</span>'}</td>
+                <td>${escapeHtml(x.created_by || '—')}</td>
+                <td>${escapeHtml(formatDate(x.updated_at))}</td>
+                <td>
+                    <div class="table-actions">
+                        <button class="btn btn-secondary btn-sm" data-action="edit" data-id="${Number(x.id)}">Edit</button>
+                        <button class="btn btn-ghost btn-sm" data-action="toggle" data-id="${Number(x.id)}">
+                            ${x.is_active ? 'Deactivate' : 'Activate'}</button>
+                        <button class="btn btn-ghost btn-sm" data-action="delete" data-id="${Number(x.id)}">Remove</button>
+                    </div>
+                </td>
+            </tr>`).join('');
+    }
+
+    exceptionsBody.addEventListener('click', async (e) => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        const item = exceptionsCache.find((x) => x.id === Number(btn.dataset.id));
+        if (!item) return;
+
+        if (btn.dataset.action === 'edit') {
+            openExceptionModal(item);
+            return;
+        }
+        if (btn.dataset.action === 'delete') {
+            const ok = await confirmDialog({
+                title: 'Remove password exception?',
+                message: `"${item.term}" will be allowed in new passwords again.`,
+                confirmText: 'Remove',
+                danger: true,
+            });
+            if (!ok) return;
+        }
+
+        setButtonLoading(btn, true, '...');
+        try {
+            const res = btn.dataset.action === 'delete'
+                ? await api('DELETE', `/api/admin/password-exceptions/${item.id}`)
+                : await api('PUT', `/api/admin/password-exceptions/${item.id}`, { isActive: !item.is_active });
+            showToast(res.message || 'Done.', 'success');
+            await loadExceptions();
+        } catch (err) {
+            showToast(err.message, 'error');
+            setButtonLoading(btn, false);
+        }
+    });
+
+    function openExceptionModal(item) {
+        const isEdit = Boolean(item);
+        const body = document.createElement('form');
+        body.noValidate = true;
+        body.innerHTML = `
+            <div class="form-group">
+                <label class="form-label" for="xTerm">Word or phrase</label>
+                <input class="form-input" type="text" id="xTerm" maxlength="128" autocomplete="off">
+                <div class="form-error"></div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="xMatch">Match</label>
+                <select class="form-select" id="xMatch">
+                    <option value="contains">Password must not contain it</option>
+                    <option value="exact">Password must not be exactly it</option>
+                </select>
+            </div>`;
+        const termInput = body.querySelector('#xTerm');
+        const matchInput = body.querySelector('#xMatch');
+        termInput.value = item?.term || '';
+        matchInput.value = item?.match_type || 'contains';
+
+        openModal({
+            title: isEdit ? 'Edit Password Exception' : 'Add Password Exception',
+            content: body,
+            confirmText: isEdit ? 'Save Changes' : 'Add Exception',
+            onConfirm: async () => {
+                setFieldError(termInput, '');
+                const term = termInput.value.trim();
+                const matchType = matchInput.value;
+                if (term.length < 3) {
+                    setFieldError(termInput, 'Enter at least 3 characters.');
+                    return false;
+                }
+                try {
+                    if (isEdit) {
+                        await api('PUT', `/api/admin/password-exceptions/${item.id}`, { term, matchType });
+                    } else {
+                        await api('POST', '/api/admin/password-exceptions', { term, matchType });
+                    }
+                    showToast(isEdit ? 'Password exception updated.' : 'Password exception added.', 'success');
+                    await loadExceptions();
+                    return true;
+                } catch (err) {
+                    setFieldError(termInput, err.message);
+                    return false;
+                }
+            },
+        });
+        termInput.focus();
     }
 
     // ---- Modal helpers ----
