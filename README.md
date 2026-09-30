@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 18+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 65 automated tests (`node:test`)
+- Tests: 71 automated tests (`node:test`)
 
 ---
 
@@ -313,7 +313,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (65 tests)
+npm test                   # everything (71 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
