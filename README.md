@@ -357,3 +357,7 @@ The integration tests start the app on a random port with the mock AD and reset 
 - **Access tokens** stay valid for up to 15 minutes after logout or lock; refresh tokens are revoked immediately.
 - **Password changes outside the portal** (AD Users & Computers, Ctrl+Alt+Del) don't end existing portal sessions. After *Change Password* in the portal, the browser signs the user out.
 - **Users appear in the admin list** only after their first sign-in to the portal.
+
+## License
+
+Released under the [MIT License](LICENSE).
