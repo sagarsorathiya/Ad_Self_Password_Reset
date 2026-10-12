@@ -237,6 +237,17 @@ function setFieldError(input, message) {
     }
 }
 
+// Sign-in and reset take the domain username only, not an email address or DOMAIN\user
+function usernameFormatError(username) {
+    if (username.includes('@')) {
+        return 'Enter your domain username only, not your email address.';
+    }
+    if (username.includes('\\')) {
+        return 'Enter your domain username only, without the domain name and \\ in front.';
+    }
+    return null;
+}
+
 function clearFieldErrors(form) {
     form.querySelectorAll('.form-input, .form-select').forEach((el) => setFieldError(el, ''));
 }

@@ -6,6 +6,7 @@ const app = require('./app');
 const config = require('./config/default');
 const db = require('./config/db');
 const ldapService = require('./services/ldapService');
+const passwordReminderService = require('./services/passwordReminderService');
 
 const PORT = config.server.port;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
@@ -75,6 +76,10 @@ server.listen(PORT, config.server.host, () => {
         console.log(`  Sync to:     ${config.ad.secondary.name} (${config.ad.mock ? 'MOCK' : target})`);
     }
     console.log(`  Trust proxy: ${config.server.trustProxy}`);
+    console.log(`  Mail:        ${config.mail.host ? `${config.mail.host}:${config.mail.port}` : 'off (SMTP_HOST not set)'}`);
+    if (config.reminders.enabled) {
+        console.log(`  Reminders:   ${config.reminders.days.join(', ')} days before expiry, daily from ${config.reminders.hour}:00`);
+    }
     console.log('');
     if (config.ad.mock) {
         console.warn('WARNING: AD_MOCK=true - using the in-memory test directory. Seed users: jsmith / Passw0rd!, admin / Adm1nPass!');
@@ -104,10 +109,12 @@ if (config.server.https && redirectPort) {
 cleanupExpiredTokens();
 const cleanupTimer = setInterval(cleanupExpiredTokens, CLEANUP_INTERVAL_MS);
 cleanupTimer.unref();
+const reminderTimer = passwordReminderService.start();
 
 function shutdown(signal) {
     console.log(`[Server] ${signal} received, shutting down...`);
     clearInterval(cleanupTimer);
+    if (reminderTimer) clearInterval(reminderTimer);
     redirectServer?.close();
     server.close(async () => {
         await db.pool.end().catch(() => {});

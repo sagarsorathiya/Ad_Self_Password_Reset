@@ -14,7 +14,7 @@
                 <div class="logo-section">
                     <img src="/assets/logo.svg" alt="" width="64" height="64" class="logo-img">
                     <h1 class="logo-title">Reset your password</h1>
-                    <p class="logo-subtitle">Verify your identity to choose a new network password</p>
+                    <p class="logo-subtitle">Verify your identity to choose a new domain password</p>
                 </div>
 
                 <div class="stepper" id="stepper">
@@ -33,7 +33,9 @@
                         <div class="form-group">
                             <label class="form-label" for="username">Username</label>
                             <input class="form-input" type="text" id="username"
-                                   autocomplete="username" autofocus maxlength="256">
+                                   autocomplete="username" autofocus maxlength="256"
+                                   placeholder="Domain username" aria-describedby="usernameHint">
+                            <p class="form-hint" id="usernameHint">Your domain username only, not your email address.</p>
                             <div class="form-error"></div>
                         </div>
                         <button type="submit" class="btn btn-primary btn-block" id="userBtn">Continue</button>

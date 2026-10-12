@@ -3,6 +3,9 @@ const config = require('../config/default');
 
 const PASSWORD_HISTORY = 3;
 const UAC_ACCOUNT_DISABLED = 2;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Like a 90-day domain password policy
+const MAX_PASSWORD_AGE_MS = 90 * DAY_MS;
 
 const SEED_USERS = [
     { username: 'jsmith', password: 'Passw0rd!', displayName: 'John Smith', mail: 'jsmith@example.local' },
@@ -12,6 +15,8 @@ const SEED_USERS = [
     { username: 'locked.user', password: 'Passw0rd!', displayName: 'Locked Out User', lockoutTime: '133000000000000000' },
     // Exists only in the first domain (exercises the "not in the second domain" path)
     { username: 'primary.only', password: 'Passw0rd!', displayName: 'Primary Only User', primaryOnly: true },
+    // Exists only in the second domain (must never get a reminder: cannot sign in to the portal)
+    { username: 'secondary.only', password: 'Passw0rd!', displayName: 'Secondary Only User', mail: 'secondary.only@example.local', secondaryOnly: true },
 ];
 
 // Approximates the default AD policy: length, 3 of 4 categories, no sAMAccountName, history.
@@ -48,6 +53,7 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         directory = new Map();
         for (const seed of SEED_USERS) {
             if (secondary && seed.primaryOnly) continue;
+            if (!secondary && seed.secondaryOnly) continue;
             const dn = `CN=${seed.displayName},${searchBase}`;
             directory.set(seed.username.toLowerCase(), {
                 entry: {
@@ -60,6 +66,8 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
                     userAccountControl: String(seed.userAccountControl || 512),
                     lockoutTime: seed.lockoutTime || '0',
                     adminCount: seed.admin ? '1' : undefined,
+                    // Stands in for msDS-UserPasswordExpiryTimeComputed (null = no expiry date)
+                    passwordExpiresAt: new Date(Date.now() + 60 * DAY_MS),
                 },
                 password: seed.password,
                 history: [seed.password],
@@ -101,6 +109,7 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         checkPolicy(record, newPassword);
         record.password = newPassword;
         record.history = [newPassword, ...record.history].slice(0, PASSWORD_HISTORY);
+        record.entry.passwordExpiresAt = new Date(Date.now() + MAX_PASSWORD_AGE_MS);
     }
 
     async function changePasswordWithOld(userDN, oldPassword, newPassword) {
@@ -108,6 +117,21 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         const record = findRecordByDn(userDN);
         if (!record || record.password !== oldPassword) throw new Error('Invalid credentials');
         await changePassword(userDN, newPassword);
+    }
+
+    async function listPasswordExpiries() {
+        ensureAvailable();
+        return [...directory.values()]
+            .map((record) => record.entry)
+            .filter((e) => e.mail && (parseInt(e.userAccountControl, 10) & UAC_ACCOUNT_DISABLED) === 0)
+            .map((e) => ({
+                dn: e.dn,
+                username: e.sAMAccountName,
+                displayName: e.displayName,
+                mail: e.mail,
+                adminCount: e.adminCount,
+                expiresAt: e.passwordExpiresAt,
+            }));
     }
 
     reset();
@@ -118,6 +142,7 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         authenticateUser,
         changePassword,
         changePasswordWithOld,
+        listPasswordExpiries,
         isServiceAccountPrivileged: async () => false,
         reset,
         setUnavailable: (value) => { unavailable = Boolean(value); },

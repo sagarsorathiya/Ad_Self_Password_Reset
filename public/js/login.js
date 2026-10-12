@@ -35,6 +35,9 @@
         if (!username) {
             setFieldError(usernameInput, 'Username is required.');
             valid = false;
+        } else if (usernameFormatError(username)) {
+            setFieldError(usernameInput, usernameFormatError(username));
+            valid = false;
         }
         if (!password) {
             setFieldError(passwordInput, 'Password is required.');

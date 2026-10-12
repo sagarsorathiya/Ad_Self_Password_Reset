@@ -3,6 +3,9 @@ process.env.AD2_URL = 'ldaps://dc.second.example.test:636';
 process.env.AD2_USER_SEARCH_BASE = 'OU=Users,DC=second,DC=example,DC=test';
 process.env.AD2_DOMAIN_LABEL = 'Mail';
 process.env.AD_DOMAIN_LABEL = 'Desktop';
+process.env.SMTP_HOST = 'smtp.example.test';
+process.env.MAIL_FROM = 'portal@example.test';
+process.env.PORTAL_URL = 'https://portal.example.test';
 
 const { startServer, resetState, login, enrollUser } = require('../helpers/setup');
 const { describe, test, before, after, beforeEach } = require('node:test');
@@ -12,15 +15,20 @@ let server;
 let api;
 let mockAd;
 let db;
+let sent = [];
 
 before(async () => {
     server = await startServer();
     api = server.request;
     mockAd = require('../../server/services/mockLdapService');
     db = require('../../server/config/db');
+    require('../../server/services/mailService').setTransport({ sendMail: async (m) => { sent.push(m); } });
 });
 after(() => server?.close());
-beforeEach(() => resetState());
+beforeEach(async () => {
+    await resetState();
+    sent = [];
+});
 
 const NEW_PASSWORD = 'Brand-New-Pass1';
 
@@ -152,5 +160,67 @@ describe('password reset', () => {
         const retry = await api('POST', '/api/password/reset/set-password', body);
         assert.equal(retry.status, 200, retry.body.message);
         await mockAd.secondary.authenticateUser('jsmith', NEW_PASSWORD);
+    });
+});
+
+describe('expiry reminders from the second domain (PASSWORD_REMINDER_SOURCE=secondary)', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    let config;
+    let reminders;
+    const reminderMails = () => sent.filter((m) => /expires/.test(m.subject));
+
+    before(() => {
+        config = require('../../server/config/default');
+        reminders = require('../../server/services/passwordReminderService');
+    });
+    beforeEach(() => { config.reminders.source = 'secondary'; });
+    after(() => { config.reminders.source = 'primary'; });
+
+    function mailExpiresIn(username, days) {
+        mockAd.secondary.setAttributes(username, { passwordExpiresAt: new Date(Date.now() + days * DAY_MS - 60 * 1000) });
+    }
+
+    test('uses the second-domain expiry and mails the first-domain address', async () => {
+        mailExpiresIn('mjones', 5);
+        mockAd.setAttributes('mjones', { mail: 'mary@desktop.example.test' });
+
+        assert.equal((await reminders.runOnce()).sent, 1);
+        const [mail] = reminderMails();
+        assert.equal(mail.to, 'mary@desktop.example.test');
+        assert.equal(mail.subject, 'Your Mail password expires in 5 days');
+        assert.match(mail.text, /https:\/\/portal\.example\.test/);
+        assert.match(mail.text, /updates both your Desktop and Mail passwords/);
+        assert.doesNotMatch(mail.text, /Ctrl\+Alt\+Del/, 'only the portal changes both domains');
+    });
+
+    test('a change in the portal resets the second-domain expiry', async () => {
+        mailExpiresIn('jsmith', 2);
+        const { token } = await login(api, 'jsmith', 'Passw0rd!');
+        await api('POST', '/api/password/change', {
+            currentPassword: 'Passw0rd!', newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD,
+        }, token);
+        assert.equal((await reminders.runOnce()).due.length, 0);
+    });
+
+    test('skips accounts the portal cannot update or sign in', async () => {
+        mailExpiresIn('admin', 3);                                   // protected in the second domain
+        mailExpiresIn('mjones', 3);
+        mockAd.setAttributes('mjones', { userAccountControl: '514' }); // disabled in the first domain
+        mailExpiresIn('secondary.only', 3);                          // no first-domain account at all
+        const result = await reminders.runOnce();
+        assert.equal(result.due.length, 0);
+        assert.equal(sent.length, 0);
+        assert.equal(result.expiring, 3);
+        assert.deepEqual(result.skipped, {
+            'Mail: protected account (adminCount=1)': 1,
+            'Desktop account disabled': 1,
+            'no Desktop account': 1,
+        });
+    });
+
+    test('primary source ignores the second-domain expiry', async () => {
+        config.reminders.source = 'primary';
+        mailExpiresIn('jsmith', 2);
+        assert.equal((await reminders.runOnce()).due.length, 0);
     });
 });

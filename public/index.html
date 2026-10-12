@@ -14,7 +14,7 @@
                 <div class="logo-section">
                     <img src="/assets/logo.svg" alt="" width="64" height="64" class="logo-img">
                     <h1 class="logo-title">Password Self-Service</h1>
-                    <p class="logo-subtitle">Sign in with your network (Windows) account</p>
+                    <p class="logo-subtitle">Sign in with your domain (Windows) account</p>
                 </div>
 
                 <div id="loginAlert" class="alert alert-warning hidden" role="alert">
@@ -26,7 +26,9 @@
                     <div class="form-group">
                         <label class="form-label" for="username">Username</label>
                         <input class="form-input" type="text" id="username" name="username"
-                               autocomplete="username" autofocus maxlength="256">
+                               autocomplete="username" autofocus maxlength="256"
+                               placeholder="Domain username" aria-describedby="usernameHint">
+                        <p class="form-hint" id="usernameHint">Your domain username only, not your email address.</p>
                         <div class="form-error"></div>
                     </div>
 

@@ -118,7 +118,53 @@ const config = {
     reset: {
         policy: process.env.RESET_POLICY || 'both',
     },
+
+    // Outgoing mail (security alerts and expiry reminders). Empty SMTP_HOST = no mail is sent.
+    mail: {
+        host: process.env.SMTP_HOST || '',
+        port: parseInt(process.env.SMTP_PORT, 10) || 25,
+        // true = implicit TLS (465); otherwise STARTTLS is used whenever the server offers it
+        secure: process.env.SMTP_SECURE === 'true',
+        // Optional; an internal relay usually accepts the portal server's IP without a login
+        user: process.env.SMTP_USER || '',
+        password: process.env.SMTP_PASSWORD || '',
+        tlsOptions: {
+            rejectUnauthorized: process.env.SMTP_TLS_REJECT_UNAUTHORIZED !== 'false',
+            ca: process.env.SMTP_CA_CERT_PATH
+                ? [fs.readFileSync(path.resolve(PROJECT_ROOT, process.env.SMTP_CA_CERT_PATH))]
+                : undefined,
+        },
+        from: process.env.MAIL_FROM || '',
+        portalName: process.env.PORTAL_NAME || process.env.TOTP_ISSUER || 'Password Reset Portal',
+        // Shown in reminders so users know where to change their password
+        portalUrl: process.env.PORTAL_URL || '',
+    },
+
+    // Password expiry reminders, sent once per stage (days before expiry) to every enabled AD user with a mail address
+    reminders: {
+        enabled: process.env.PASSWORD_REMINDERS === 'true',
+        days: (process.env.PASSWORD_REMINDER_DAYS || '14,7,3,1')
+            .split(',').map((d) => parseInt(d.trim(), 10)).filter((d) => d > 0),
+        // Local hour from which the daily run starts (0-23)
+        hour: parseInt(process.env.PASSWORD_REMINDER_HOUR, 10) || 9,
+        // Domain whose password expiry is used: 'primary' or 'secondary' (AD2_*, when only that domain expires
+        // passwords). Reminders always go to the first-domain mail address of users who can sign in.
+        source: process.env.PASSWORD_REMINDER_SOURCE || 'primary',
+    },
 };
+
+if (config.mail.host && !config.mail.from) {
+    throw new Error('MAIL_FROM must be set when SMTP_HOST is set (e.g. "IT Service Desk <it@corp.example>").');
+}
+if (config.reminders.enabled && !config.mail.host) {
+    throw new Error('PASSWORD_REMINDERS=true requires SMTP_HOST and MAIL_FROM.');
+}
+if (!['primary', 'secondary'].includes(config.reminders.source)) {
+    throw new Error('PASSWORD_REMINDER_SOURCE must be primary or secondary.');
+}
+if (config.reminders.source === 'secondary' && !config.ad.secondary) {
+    throw new Error('PASSWORD_REMINDER_SOURCE=secondary requires the second domain (AD2_URL or AD2_SERVER).');
+}
 
 if (!['both', 'totp_only', 'either'].includes(config.reset.policy)) {
     throw new Error('RESET_POLICY must be one of: both, totp_only, either.');

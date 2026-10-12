@@ -2,9 +2,9 @@
 
 An **intranet** web portal that lets Active Directory users change their password and reset a forgotten password on their own. Users prove who they are with **security questions** or an **authenticator app (TOTP)**. Help-desk staff get an admin panel for enrollment tracking, account locking and an audit trail.
 
-- Backend: Node.js 18+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
+- Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 82 automated tests (`node:test`)
+- Tests: 96 automated tests (`node:test`)
 
 ---
 
@@ -36,6 +36,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 | Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes. |
 | Change password | For signed-in users. The current password is checked against AD. |
 | Second domain (optional) | Every change and reset also sets the same password in a second domain (same username), e.g. a separate mail domain. See §5.1. |
+| Mail (optional) | Security alert after every password change or reset (time, IP address, browser, method). Daily reminders before the password expires. See §5.2. |
 | Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, audit log viewer, security question management, password exception list (blocked words). |
 | Security | Rate limiting, account lockout, TOTP replay protection, refresh-token revocation, audit log, CSP/Helmet. |
 
@@ -44,16 +45,19 @@ An **intranet** web portal that lets Active Directory users change their passwor
 ```
 Browser ──HTTPS──► Express (Node.js) ──LDAPS 636──► Active Directory
                         │
-                        └──TCP 5432──► PostgreSQL (enrollment, answers, TOTP secrets, audit)
+                        ├──TCP 5432──► PostgreSQL (enrollment, answers, TOTP secrets, audit)
+                        │
+                        └──SMTP 25───► Mail relay (optional: alerts and expiry reminders)
 ```
 
 - **Passwords are never stored.** Every password operation goes straight to AD.
 - **Admin rights** come from membership in the AD group set in `AD_ADMIN_GROUP`.
-- Layout: `server/` (config, controllers, middleware, routes, services, db/schema.sql), `public/` (pages and scripts), `scripts/init-db.js`, `test/`.
+- **Mail is optional.** Without `SMTP_HOST` the portal sends nothing.
+- Layout: `server/` (config, controllers, middleware, routes, services, db/schema.sql), `public/` (pages and scripts), `scripts/` (database setup, mail test, reminder dry run, Windows helpers), `test/`.
 
 ## 3. Quick start (development)
 
-Prerequisites: Node.js 18+ and PostgreSQL 13+.
+Prerequisites: Node.js 20+ and PostgreSQL 13+.
 
 ```powershell
 npm install
@@ -122,10 +126,19 @@ All settings live in `.env`, which is git-ignored.
 | `RESET_POLICY` | `both` | `both`: security questions **and** authenticator code (recommended). `totp_only`: authenticator only. `either`: one of the two. |
 | `HTTP_REDIRECT_PORT` | – | Optional plain-HTTP port that only redirects to HTTPS (e.g. `80` with `PORT=443`) |
 | `AD_ALLOW_PRIVILEGED_BIND` | `false` | Production refuses to start if `AD_BIND_DN` or `AD2_BIND_DN` is privileged (adminCount=1). Override only; it applies to both accounts unless `AD2_ALLOW_PRIVILEGED_BIND` is set. |
+| `SMTP_HOST` / `SMTP_PORT` | – / `25` | SMTP relay for alerts and reminders. Empty = no mail is sent. |
+| `SMTP_SECURE` | `false` | `true` for implicit TLS (port 465). Otherwise STARTTLS is used whenever the server offers it. |
+| `SMTP_USER` / `SMTP_PASSWORD` | – | Only if the relay requires a login. `SMTP_PASSWORD` can be DPAPI-encrypted. |
+| `SMTP_CA_CERT_PATH` / `SMTP_TLS_REJECT_UNAUTHORIZED` | – / `true` | CA for the mail server certificate. Set `false` only for a relay with a self-signed certificate. |
+| `MAIL_FROM` | – | Sender, e.g. `IT Service Desk <it-noreply@corp.example>`. Required with `SMTP_HOST`. |
+| `PORTAL_NAME` / `PORTAL_URL` | `TOTP_ISSUER` / – | Name used in mails; portal address shown in alerts and reminders. |
+| `PASSWORD_REMINDERS` | `false` | `true` = daily expiry reminders (needs `SMTP_HOST`). |
+| `PASSWORD_REMINDER_DAYS` / `PASSWORD_REMINDER_HOUR` | `14,7,3,1` / `9` | Days before expiry that get a reminder; local hour of the daily run. |
+| `PASSWORD_REMINDER_SOURCE` | `primary` | Domain whose password expiry is used. `secondary` when only the second domain expires passwords. |
 | `AD2_ALLOW_PRIVILEGED_BIND` | – | Override for `AD2_BIND_DN` only. Set `true` (with `AD_ALLOW_PRIVILEGED_BIND=false`) to keep the first-domain check active while the second domain uses a privileged account. |
 
 ### Encrypting secrets in `.env`
-Run `.\scripts\protect-secret.ps1` to encrypt every plain-text secret in `.env` (`AD_BIND_PASSWORD`, `PG_PASSWORD`, `JWT_SECRET`, `TOTP_ENCRYPTION_KEY`, `TLS_PFX_PASSPHRASE`) with **Windows DPAPI**. Values become `dpapi:…` and are decrypted in memory at startup.
+Run `.\scripts\protect-secret.ps1` to encrypt every plain-text secret in `.env` (`AD_BIND_PASSWORD`, `AD2_BIND_PASSWORD`, `PG_PASSWORD`, `JWT_SECRET`, `TOTP_ENCRYPTION_KEY`, `TLS_PFX_PASSPHRASE`, `SMTP_PASSWORD`) with **Windows DPAPI**. Values become `dpapi:…` and are decrypted in memory at startup.
 - Default scope is **CurrentUser**: run the script as the **same Windows account that runs the portal/service**. For a service running as LocalSystem, use `-Machine` (any process on that server can decrypt, but a copied `.env` is useless elsewhere).
 - To change one value: `.\scripts\protect-secret.ps1 -Name AD_BIND_PASSWORD` (hidden prompt).
 - Encrypted values can't be moved to another server or account. **Keep `TOTP_ENCRYPTION_KEY` in your password vault**; if it's lost, every user has to enroll again.
@@ -184,6 +197,76 @@ How it behaves:
 - If the second domain rejects the password (for example because its policy is stricter), the first domain has already changed. The user is told that only one domain was updated and is asked to use *Forgot password* with a password that meets both policies. Each outcome is recorded in the audit log as `password_sync`.
 - Use the same (or compatible) password policies in both domains to avoid partial changes.
 - To check it works: the startup log shows `Sync to: <label> (...)`, and after a change the audit log has a `password_sync` entry `<label>: password updated`.
+
+### 5.2 Mail: security alerts and expiry reminders (optional)
+
+Set `SMTP_HOST`, `SMTP_PORT` and `MAIL_FROM`. An internal relay that accepts mail from the portal server's IP needs no login. Restart the portal; the startup log shows `Mail: <host>:<port>`. Then test with:
+
+```powershell
+node scripts/send-test-mail.js you@corp.example         # one short test message
+node scripts/send-test-mail.js you@corp.example --all   # one sample of every mail users can get
+```
+
+`--all` builds each alert and reminder with the real templates and this server's settings (labels, `PORTAL_URL`, reminder stages), marks the subjects `[Sample]` and sends them only to the address you give, so you can review the formatting in your own mail client.
+
+**Security alert.** After every successful password change or reset, the user gets a plain-text mail with the time, IP address, browser, the method used (change, or reset with questions / authenticator) and which domains were updated, plus "if this wasn't you, contact IT" and the portal address (`PORTAL_URL`). The portal address is the only link in any mail. The address is the user's `mail` attribute in the first domain. Users without one are skipped. The mail is sent after the response, so a slow relay never delays the user, and a mail failure never undoes a password change. Each outcome is audited as `notification`.
+
+**Expiry reminders.** With `PASSWORD_REMINDERS=true`, the portal checks AD once a day from `PASSWORD_REMINDER_HOUR`. It mails every enabled user in `AD_USER_SEARCH_BASE` who has a `mail` address and a password that expires, once per stage (`PASSWORD_REMINDER_DAYS`, default 14, 7, 3 and 1 days before expiry). The expiry date is AD's own (`msDS-UserPasswordExpiryTimeComputed`), so the domain policy and fine-grained password policies apply. Users with *password never expires*, disabled accounts, and accounts that must change the password at next logon are skipped. Sent stages are recorded in `password_reminders`, so restarts never cause duplicates, and a new password starts a new cycle. A failed mail is retried at the next run. Each mail is audited as `password_reminder`.
+
+**When only the second domain expires passwords** (for example a mail domain with a maximum password age while the sign-in domain has none), set `PASSWORD_REMINDER_SOURCE=secondary`. The expiry is then read from the second domain, but reminders still go only to users with an **enabled account in the first domain**, at that account's `mail` address. Second-domain accounts without a first-domain account, and accounts the sync never writes (disabled, `adminCount=1`, the `AD2_BIND_DN` account), get no reminder, because changing the password in the portal wouldn't help them. Whenever a second domain is configured, reminders point users to the portal only (Ctrl+Alt+Del would change just one domain).
+
+**What users receive** (plain text, from `MAIL_FROM`; "Desktop"/"Mail" are `AD_DOMAIN_LABEL`/`AD2_DOMAIN_LABEL`, the sign-off uses `PORTAL_NAME`):
+
+```
+Subject: Your password was reset
+
+Hello Jane Doe,
+
+The password for your account "jdoe" was reset with "Forgot password" (verified with: authenticator app).
+
+When:      12 Oct 2026, 14:05 (Europe/Berlin)
+From IP:   192.0.2.10
+Browser:   Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...
+Updated:   Desktop, Mail
+
+If this was you, no action is needed.
+If this was NOT you, contact IT immediately: someone else may have access to your account.
+
+Password portal: https://password.corp.example
+```
+
+```
+Subject: Your Mail password expires in 7 days
+
+Hello Jane Doe,
+
+The Mail password for your account "jdoe" expires in 7 days, on Monday, 19 October 2026.
+Please change it before then; after it expires you cannot sign in until it is reset.
+
+Change it at https://password.corp.example (sign in, then choose Change Password).
+This updates both your Desktop and Mail passwords.
+```
+
+A change while signed in says *was changed* instead of *was reset*, and the last reminder says *expires tomorrow*. Without a second domain, reminders say *Your password expires...* and also mention Ctrl+Alt+Del. Every mail ends with "Never share your password. IT will never ask for it by email or phone." and a do-not-reply line.
+
+Before switching reminders on, see who would get one (nothing is sent):
+
+```powershell
+node scripts/password-reminders.js          # dry run
+node scripts/password-reminders.js --send   # send now instead of waiting for the daily run
+```
+
+The dry run lists each user who is due (username, days left, address) and a summary. With `PASSWORD_REMINDER_SOURCE=secondary`, "checked" counts every second-domain account, because that's where the expiry is read. The summary then shows how many were skipped and why, e.g. `no Desktop account`, `Desktop account disabled`, `Mail: protected account (adminCount=1)`:
+
+```
+820 Mail account(s) checked (expiry read from Mail)
+96 expire within 14 days and are not yet reminded
+  -   41 skipped: no Desktop account
+  -    3 skipped: Desktop account disabled
+52 due (reminder goes to the Desktop mail address)
+```
+
+The service account only needs to read users (the default for domain users). Run `npm run db:init` once after upgrading, to create the `password_reminders` table.
 
 ## 6. PostgreSQL setup
 
@@ -265,11 +348,12 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 - [ ] Least-privilege AD service account (production refuses privileged accounts)
 - [ ] Install folder and `.env` restricted to Administrators + SYSTEM
 - [ ] DNS record created; PFX file deleted after import; `postgres` password rotated
+- [ ] Optional mail: test mail sent (`scripts/send-test-mail.js`), reminder dry run checked before `PASSWORD_REMINDERS=true`
 - [ ] End-user test from a domain PC (sign in, enroll, reset, admin page)
 
 ## 8. User guide
 
-1. **First sign-in:** open the portal and sign in with your Windows username and password. You're taken straight to enrollment.
+1. **First sign-in:** open the portal and sign in with your domain username (just the username, not your email address or `DOMAINSername`) and password. You're taken straight to enrollment.
 2. **Enroll:**
    - Step 1: pick 3 different questions and type answers (not case-sensitive).
    - Step 2: scan the QR code with Microsoft Authenticator, Google Authenticator or a similar app, then type the 6-digit code.
@@ -278,14 +362,15 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 5. **Security Settings** (shown in the navigation bar once you've enrolled):
    - **Update questions or answers:** your current questions are pre-selected. Answers are stored as one-way hashes and can't be shown to anyone, so leave an answer blank to keep it, or type a new one.
    - **Replace authenticator (new device):** scan the new QR code and enter a code from the new device. Your old device keeps working until the new one is verified, then stops working.
-6. **Password rules:** at least 8 characters, with 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username, and your domain policy may block recently used passwords.
+6. **Emails** (if your organization turned them on): after every password change or reset you get an email with the time, IP address and browser. If you didn't make the change, contact IT immediately. Before your password expires you get reminders (by default 14, 7, 3 and 1 days before). Change your password in the portal when you get one.
+7. **Password rules:** at least 8 characters, with 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username, and your domain policy may block recently used passwords.
 
 ## 9. Admin guide
 
 Members of `AD_ADMIN_GROUP` see **Admin** in the navigation bar.
 - **Stats:** total, enrolled, pending and locked users (users appear once they've signed in for the first time).
 - **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers and authenticator, which you'd use for a lost phone. They must enroll again at their next sign-in.
-- **Audit Log:** filter by exact username, action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent.
+- **Audit Log:** filter by exact username, action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), including failures.
 - **Security Questions:** add, edit, reorder, deactivate. Deactivating a question hides it from new enrollments; existing users keep it.
 - **Password Exceptions:** words or phrases that new passwords (change and reset) may not use. *Contains* blocks any password that includes the entry; *Exact* blocks only that exact password. Matching ignores case and common look-alikes (`@`→a, `0`→o, `1`→i/l, `3`→e, `$`/`5`→s, `7`→t, `4`→a), so `company` also blocks `C0mp@ny2026`. Entries can be edited, deactivated or removed and apply immediately, in addition to the domain password policy.
 
@@ -315,6 +400,7 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 | SQL injection | Parameterized queries only (covered by a test) |
 | Second-domain account takeover by name | Sync never writes a second-domain account that is disabled, protected (`adminCount=1`) or the `AD2_BIND_DN` account; the second domain is looked up before anything is written, and every outcome is audited (`password_sync`) |
 | Secrets passed to the Windows helper | `AD2_MODE=windows` sends credentials and passwords to PowerShell over stdin only (never the command line), and the connection is sealed (sign-and-seal); keep PowerShell *Module Logging* (event 4103) disabled on the portal server, because it would record command arguments |
+| Password change you didn't make | Optional alert mail after every change and reset (time, IP, browser); mails never contain a password, and the only link is the portal's own address |
 | Misconfiguration | Production refuses to start with a weak or missing `JWT_SECRET`/`TOTP_ENCRYPTION_KEY` or with `AD_MOCK` |
 
 ## 11. API reference
@@ -354,13 +440,13 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (82 tests)
+npm test                   # everything (96 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
 ## 13. Maintenance & operations
 
-- **Expired reset tokens** are removed automatically every hour.
+- **Expired reset tokens** are removed automatically every hour; reminder records 30 days after the expiry date they belong to.
 - **Audit log retention:** decide on a retention period and schedule e.g. `DELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '1 year';`
 - **Backups:** daily `pg_dump -h localhost -U postgres -Fc <database> > portal.dump`. Keep the `TOTP_ENCRYPTION_KEY` in your vault: a machine-encrypted `.env` can't be restored on another server.
 - **Upgrades:** copy the new files to the install folder (never overwrite `.env`), run `npm ci --omit=dev` and `npm run db:init` (applies schema changes), then restart the portal.
@@ -389,6 +475,9 @@ The integration tests start the app on a random port with the mock AD and reset 
 | IIS returns **502** | Node isn't running behind IIS. Check the portal log and the scheduled task. |
 | "Current password is incorrect" right after a failed change | The password may already have been changed by the earlier attempt. Compare the user's `pwdLastSet` in AD with the audit log (`password_change` entries). The user should sign in with the **new** password. |
 | `Failed to change password: ... closed` | The LDAP connection closed before AD replied. Make sure the server runs the current `server/services/ldapService.js`. |
+| No alert or reminder arrives | Check the audit log (`notification` / `password_reminder` rows show the reason), then `node scripts/send-test-mail.js <address>`. The user's AD account needs a `mail` attribute. |
+| Mail fails with `self signed certificate` / `unable to verify` | The relay offers STARTTLS with a certificate Node doesn't trust. Set `SMTP_CA_CERT_PATH` to its CA, or (self-signed relay only) `SMTP_TLS_REJECT_UNAUTHORIZED=false`. |
+| Mail fails with `5.7.1` / relay denied | The relay doesn't accept mail from the portal server. Allow the server's IP on the relay connector, or use `SMTP_USER`/`SMTP_PASSWORD`. |
 | `Cannot decrypt <NAME>` at startup | The `.env` was encrypted on another machine or by another account. Re-enter the value with `scripts\protect-secret.ps1 -Machine` on this server. |
 | `running scripts is disabled on this system` | Run `Set-ExecutionPolicy -Scope Process Bypass` in that PowerShell window first. |
 

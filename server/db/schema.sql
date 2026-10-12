@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS password_exceptions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_password_exceptions_term ON password_exceptions (LOWER(term));
 
+-- Password expiry reminders already sent: one row per user, expiry date and stage (days before expiry).
+-- A new password gives a new expiry date, so the next cycle starts automatically.
+CREATE TABLE IF NOT EXISTS password_reminders (
+    username VARCHAR(100) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    days_before INTEGER NOT NULL,
+    sent_at TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (username, expires_at, days_before)
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_audit_log_username ON audit_log(username);

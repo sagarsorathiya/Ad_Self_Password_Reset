@@ -1,5 +1,6 @@
 const ldap = require('ldapjs');
 const config = require('../config/default');
+const { fileTimeToDate } = require('./adTime');
 
 // RFC 4515 escaping for values inside LDAP search filters (prevents LDAP injection)
 function escapeFilterValue(value) {
@@ -151,22 +152,7 @@ function createDirectory(ad) {
                     let user = null;
 
                     res.on('searchEntry', (entry) => {
-                        const attrs = {};
-                        // ldapjs v3 returns pojo entries
-                        if (entry.pojo) {
-                            entry.pojo.attributes.forEach(attr => {
-                                attrs[attr.type] = attr.values.length === 1 ? attr.values[0] : attr.values;
-                            });
-                            attrs.dn = entry.pojo.objectName;
-                        } else {
-                            // Fallback for older versions
-                            attrs.dn = entry.objectName || entry.dn?.toString();
-                            for (const attr of entry.attributes || []) {
-                                const vals = attr.values || attr._vals?.map(v => v.toString());
-                                attrs[attr.type] = vals?.length === 1 ? vals[0] : vals;
-                            }
-                        }
-                        user = attrs;
+                        user = entryAttributes(entry);
                     });
 
                     res.on('error', (err) => {
@@ -176,6 +162,54 @@ function createDirectory(ad) {
                     res.on('end', () => {
                         resolve(user);
                     });
+                });
+            });
+        } finally {
+            client.unbind(() => {});
+        }
+    }
+
+    /**
+     * Password expiry of every enabled user with a mail address whose password can expire.
+     * Uses AD's computed expiry, so the domain policy and fine-grained password policies apply.
+     * @returns {Promise<Array<{dn, username, displayName, mail, adminCount, expiresAt: Date|null}>>}
+     *   expiresAt null = no expiry date (e.g. "must change at next logon", or no maximum password age)
+     */
+    async function listPasswordExpiries() {
+        const client = await bindServiceAccount();
+
+        try {
+            return await new Promise((resolve, reject) => {
+                const searchOptions = {
+                    scope: 'sub',
+                    // Enabled (UAC bit 2 clear), password can expire (UAC bit 65536 clear), has a mail address
+                    filter: '(&(objectCategory=person)(objectClass=user)(mail=*)'
+                        + '(!(userAccountControl:1.2.840.113556.1.4.803:=2))'
+                        + '(!(userAccountControl:1.2.840.113556.1.4.803:=65536)))',
+                    attributes: ['sAMAccountName', 'displayName', 'mail', 'adminCount', 'msDS-UserPasswordExpiryTimeComputed'],
+                    paged: { pageSize: 500 },
+                };
+
+                client.search(ad.userSearchBase, searchOptions, (err, res) => {
+                    if (err) {
+                        reject(new Error(`LDAP search failed: ${err.message}`));
+                        return;
+                    }
+
+                    const users = [];
+                    res.on('searchEntry', (entry) => {
+                        const attrs = entryAttributes(entry);
+                        users.push({
+                            dn: attrs.dn,
+                            username: attrs.sAMAccountName,
+                            displayName: attrs.displayName || '',
+                            mail: attrs.mail,
+                            adminCount: attrs.adminCount,
+                            expiresAt: fileTimeToDate(attrs['msDS-UserPasswordExpiryTimeComputed']),
+                        });
+                    });
+                    res.on('error', (e) => reject(new Error(`LDAP search error: ${e.message}`)));
+                    res.on('end', () => resolve(users));
                 });
             });
         } finally {
@@ -287,8 +321,29 @@ function createDirectory(ad) {
         authenticateUser,
         changePassword,
         changePasswordWithOld,
+        listPasswordExpiries,
         isServiceAccountPrivileged,
     };
+}
+
+// Search entry → { dn, attribute: value | [values] }
+function entryAttributes(entry) {
+    const attrs = {};
+    // ldapjs v3 returns pojo entries
+    if (entry.pojo) {
+        entry.pojo.attributes.forEach(attr => {
+            attrs[attr.type] = attr.values.length === 1 ? attr.values[0] : attr.values;
+        });
+        attrs.dn = entry.pojo.objectName;
+    } else {
+        // Fallback for older versions
+        attrs.dn = entry.objectName || entry.dn?.toString();
+        for (const attr of entry.attributes || []) {
+            const vals = attr.values || attr._vals?.map(v => v.toString());
+            attrs[attr.type] = vals?.length === 1 ? vals[0] : vals;
+        }
+    }
+    return attrs;
 }
 
 /**

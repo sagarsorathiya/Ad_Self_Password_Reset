@@ -24,4 +24,5 @@ test('reports an unreachable DC for lookups and password writes', windowsOnly, a
 
     await assert.rejects(dir.findUser('jsmith*)(x'), /Directory server unreachable: 127\.0\.0\.1/);
     await assert.rejects(dir.changePassword('CN=x,DC=test,DC=local', 'Nëw-Pass"1'), /Directory server unreachable: 127\.0\.0\.1/);
+    await assert.rejects(dir.listPasswordExpiries(), /Directory server unreachable: 127\.0\.0\.1/);
 });

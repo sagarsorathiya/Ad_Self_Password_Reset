@@ -50,6 +50,10 @@
             setFieldError(usernameInput, 'Username is required.');
             return;
         }
+        if (usernameFormatError(username)) {
+            setFieldError(usernameInput, usernameFormatError(username));
+            return;
+        }
 
         setButtonLoading(userBtn, true, 'Checking...');
         try {

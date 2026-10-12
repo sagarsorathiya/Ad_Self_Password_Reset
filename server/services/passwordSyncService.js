@@ -72,4 +72,4 @@ async function apply(plan, newPassword) {
     }
 }
 
-module.exports = { isEnabled, prepare, apply, SecondaryUnavailableError };
+module.exports = { isEnabled, prepare, apply, refusalReason, SecondaryUnavailableError };

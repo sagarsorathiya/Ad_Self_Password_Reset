@@ -56,6 +56,32 @@ try {
             $entry.psbase.CommitChanges()
             Write-Result @{ ok = $true }
         }
+        'listPasswordExpiries' {
+            # Enabled, password can expire, has a mail address; AD computes the expiry (domain policy and PSOs)
+            $base = $req.searchBase
+            if (-not $base) { $base = [string](Open-Entry 'RootDSE').psbase.Properties['defaultNamingContext'].Value }
+            $filter = '(&(objectCategory=person)(objectClass=user)(mail=*)' +
+                '(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(userAccountControl:1.2.840.113556.1.4.803:=65536)))'
+            $properties = @('distinguishedName', 'sAMAccountName', 'displayName', 'mail', 'userAccountControl', 'adminCount',
+                'msDS-UserPasswordExpiryTimeComputed')
+            $searcher = New-Object DirectoryServices.DirectorySearcher((Open-Entry $base), $filter, $properties)
+            $searcher.SearchScope = [DirectoryServices.SearchScope]::Subtree
+            $searcher.ReferralChasing = [DirectoryServices.ReferralChasingOption]::None
+            $searcher.PageSize = 500
+            $users = New-Object System.Collections.ArrayList
+            foreach ($r in $searcher.FindAll()) {
+                [void]$users.Add(@{
+                    dn = First $r 'distinguishedname'
+                    sAMAccountName = First $r 'samaccountname'
+                    displayName = First $r 'displayname'
+                    mail = First $r 'mail'
+                    userAccountControl = First $r 'useraccountcontrol'
+                    adminCount = First $r 'admincount'
+                    passwordExpiryTime = First $r 'msds-userpasswordexpirytimecomputed'
+                })
+            }
+            Write-Result @{ ok = $true; users = $users.ToArray() }
+        }
         'isPrivileged' {
             $r = Find-One "(&(objectClass=user)(sAMAccountName=$($req.filterValue)))" @('adminCount')
             Write-Result @{ ok = $true; privileged = [bool]($r -and (First $r 'admincount') -eq '1') }

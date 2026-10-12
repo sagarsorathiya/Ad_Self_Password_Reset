@@ -8,6 +8,7 @@ const ldapService = require('../services/ldapService');
 const totpService = require('../services/totpService');
 const passwordExceptionService = require('../services/passwordExceptionService');
 const passwordSyncService = require('../services/passwordSyncService');
+const notificationService = require('../services/notificationService');
 const { logAudit } = require('./authController');
 
 const INCORRECT_ANSWERS_MESSAGE = 'One or more answers are incorrect. Please try again.';
@@ -77,6 +78,11 @@ async function changePassword(req, res) {
         await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, true);
 
         const sync = await syncSecondary(syncPlan, newPassword, req.user.userId, req.user.username, 'authenticated', req);
+
+        // Not awaited: a slow mail relay must not delay the answer
+        notificationService.sendPasswordChangedAlert({
+            userId: req.user.userId, username: req.user.username, method: 'authenticated', req, sync,
+        });
 
         res.json({
             success: true,
@@ -581,6 +587,11 @@ async function setPassword(req, res) {
         await logAudit(decoded.userId, decoded.username, 'password_reset', decoded.method || 'unknown', req, true);
 
         const sync = await syncSecondary(syncPlan, newPassword, decoded.userId, decoded.username, decoded.method || 'unknown', req);
+
+        // Not awaited: a slow mail relay must not delay the answer
+        notificationService.sendPasswordChangedAlert({
+            userId: decoded.userId, username: decoded.username, method: decoded.method || 'unknown', req, sync, adUser,
+        });
 
         res.json({
             success: true,

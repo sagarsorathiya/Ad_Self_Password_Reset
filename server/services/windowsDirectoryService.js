@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { fileTimeToDate } = require('./adTime');
 
 const SCRIPT = fs.readFileSync(path.join(__dirname, 'windowsDirectory.ps1'), 'utf8');
 // -EncodedCommand is not subject to the execution policy and needs no quoting
@@ -84,6 +85,21 @@ function createWindowsDirectory(ad, escapeFilterValue) {
         await run({ op: 'changePassword', dn: userDN, newPassword });
     }
 
+    // Same shape as ldapService.listPasswordExpiries()
+    async function listPasswordExpiries() {
+        const { users } = await run({ op: 'listPasswordExpiries' });
+        // Windows PowerShell may turn a one-element array into a single object
+        const list = Array.isArray(users) ? users : users ? [users] : [];
+        return list.map((u) => ({
+            dn: u.dn,
+            username: u.sAMAccountName,
+            displayName: u.displayName || '',
+            mail: u.mail,
+            adminCount: u.adminCount,
+            expiresAt: fileTimeToDate(u.passwordExpiryTime),
+        }));
+    }
+
     async function isServiceAccountPrivileged() {
         const { privileged } = await run({ op: 'isPrivileged', filterValue: escapeFilterValue(accountName(ad.bindDN)) });
         return privileged;
@@ -93,6 +109,7 @@ function createWindowsDirectory(ad, escapeFilterValue) {
         name: ad.name,
         findUser,
         changePassword,
+        listPasswordExpiries,
         isServiceAccountPrivileged,
     };
 }
