@@ -284,11 +284,14 @@
 
         setButtonLoading(pwBtn, true, 'Resetting...');
         try {
-            await api('POST', '/api/password/reset/set-password', {
+            const res = await api('POST', '/api/password/reset/set-password', {
                 resetToken: state.resetToken,
                 newPassword: newPw.value,
                 confirmPassword: confirmPw.value,
             });
+            const syncWarning = document.getElementById('doneSyncWarning');
+            syncWarning.textContent = res.data?.sync?.status === 'failed' ? res.message : '';
+            syncWarning.classList.toggle('hidden', res.data?.sync?.status !== 'failed');
             state.resetToken = null;
             clearInterval(countdownTimer);
             pwForm.reset();

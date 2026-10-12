@@ -1,277 +1,294 @@
 const ldap = require('ldapjs');
 const config = require('../config/default');
 
-/**
- * Create an LDAP client connection.
- * @returns {ldap.Client}
- */
-function createClient() {
-    const clientOptions = {
-        url: config.ad.url,
-        connectTimeout: 10000,
-        timeout: 10000,
-    };
-
-    // Add TLS options for LDAPS connections
-    if (config.ad.url.startsWith('ldaps://')) {
-        clientOptions.tlsOptions = config.ad.tlsOptions;
-    }
-
-    return ldap.createClient(clientOptions);
-}
-
-/**
- * Bind (authenticate) to LDAP with given credentials.
- * @param {string} dn - Distinguished name to bind as
- * @param {string} password - Password for the bind
- * @returns {Promise<ldap.Client>} - The bound client
- */
-function bindClient(dn, password) {
-    return new Promise((resolve, reject) => {
-        const client = createClient();
-        const unreachable = (reason) => {
-            reject(new Error(`Directory server unreachable: ${reason} (${config.ad.url})`));
-            client.destroy();
-        };
-
-        client.on('connectTimeout', () => unreachable('connection timed out'));
-        client.on('connectError', (err) => unreachable(err.message));
-        client.on('error', (err) => {
-            reject(new Error(`LDAP connection error: ${err.message}`));
-        });
-
-        const doBind = () => client.bind(dn, password, (err) => {
-            if (err) {
-                client.destroy();
-                if (err.code === 49) {
-                    reject(new Error('Invalid credentials'));
-                } else {
-                    reject(new Error(`LDAP bind failed: ${err.message}`));
-                }
-            } else {
-                resolve(client);
-            }
-        });
-
-        if (!useStartTls()) {
-            doBind();
-            return;
-        }
-
-        // Credentials must never be sent before the TLS upgrade completes
-        client.once('connect', () => {
-            client.starttls(config.ad.tlsOptions, [], (err) => {
-                if (err) {
-                    client.destroy();
-                    reject(new Error(`LDAP connection error: StartTLS failed: ${err.message}`));
-                    return;
-                }
-                doBind();
-            });
-        });
-    });
-}
-
-function useStartTls() {
-    return config.ad.startTls && config.ad.url.startsWith('ldap://');
-}
-
-function isEncrypted() {
-    return config.ad.url.startsWith('ldaps://') || useStartTls();
-}
-
 // RFC 4515 escaping for values inside LDAP search filters (prevents LDAP injection)
 function escapeFilterValue(value) {
     return String(value).replace(/[\\*()\0]/g, (c) => `\\${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
 }
 
 /**
- * Bind with the service account credentials.
- * @returns {Promise<ldap.Client>}
+ * Directory operations for one domain.
+ * @param {object} ad - Domain settings (config.ad or config.ad.secondary)
  */
-async function bindServiceAccount() {
-    return bindClient(config.ad.bindDN, config.ad.bindPassword);
-}
+function createDirectory(ad) {
+    /**
+     * Create an LDAP client connection.
+     * @returns {ldap.Client}
+     */
+    function createClient() {
+        const clientOptions = {
+            url: ad.url,
+            connectTimeout: 10000,
+            timeout: 10000,
+        };
 
-/**
- * True if the bind account is protected by AdminSDHolder (adminCount=1), i.e. a member of
- * Domain/Enterprise Admins, Administrators, Account Operators, etc. (including nested).
- */
-async function isServiceAccountPrivileged() {
-    const client = await bindServiceAccount();
-    try {
-        return await new Promise((resolve, reject) => {
-            client.search(config.ad.bindDN, { scope: 'base', attributes: ['adminCount'] }, (err, res) => {
-                if (err) return reject(new Error(`LDAP search failed: ${err.message}`));
-                let privileged = false;
-                res.on('searchEntry', (entry) => {
-                    const attr = (entry.pojo?.attributes || entry.attributes || []).find((a) => a.type === 'adminCount');
-                    privileged = attr?.values?.[0] === '1';
-                });
-                res.on('error', (e) => reject(new Error(`LDAP search error: ${e.message}`)));
-                res.on('end', () => resolve(privileged));
-            });
-        });
-    } finally {
-        client.unbind(() => {});
+        // Add TLS options for LDAPS connections
+        if (ad.url.startsWith('ldaps://')) {
+            clientOptions.tlsOptions = ad.tlsOptions;
+        }
+
+        return ldap.createClient(clientOptions);
     }
-}
 
-/**
- * Search for a user in AD by sAMAccountName.
- * @param {string} username - sAMAccountName
- * @returns {Promise<object|null>} - User entry or null
- */
-async function findUser(username) {
-    const client = await bindServiceAccount();
-
-    try {
-        return await new Promise((resolve, reject) => {
-            const searchOptions = {
-                scope: 'sub',
-                filter: `(&(objectClass=user)(objectCategory=person)(sAMAccountName=${escapeFilterValue(username)}))`,
-                attributes: [
-                    'dn', 'sAMAccountName', 'displayName', 'mail',
-                    'userPrincipalName', 'memberOf', 'userAccountControl',
-                    'pwdLastSet', 'lockoutTime',
-                ],
+    /**
+     * Bind (authenticate) to LDAP with given credentials.
+     * @param {string} dn - Distinguished name to bind as
+     * @param {string} password - Password for the bind
+     * @returns {Promise<ldap.Client>} - The bound client
+     */
+    function bindClient(dn, password) {
+        return new Promise((resolve, reject) => {
+            const client = createClient();
+            const unreachable = (reason) => {
+                reject(new Error(`Directory server unreachable: ${reason} (${ad.url})`));
+                client.destroy();
             };
 
-            client.search(config.ad.userSearchBase, searchOptions, (err, res) => {
-                if (err) {
-                    reject(new Error(`LDAP search failed: ${err.message}`));
-                    return;
-                }
-
-                let user = null;
-
-                res.on('searchEntry', (entry) => {
-                    const attrs = {};
-                    // ldapjs v3 returns pojo entries
-                    if (entry.pojo) {
-                        entry.pojo.attributes.forEach(attr => {
-                            attrs[attr.type] = attr.values.length === 1 ? attr.values[0] : attr.values;
-                        });
-                        attrs.dn = entry.pojo.objectName;
-                    } else {
-                        // Fallback for older versions
-                        attrs.dn = entry.objectName || entry.dn?.toString();
-                        for (const attr of entry.attributes || []) {
-                            const vals = attr.values || attr._vals?.map(v => v.toString());
-                            attrs[attr.type] = vals?.length === 1 ? vals[0] : vals;
-                        }
-                    }
-                    user = attrs;
-                });
-
-                res.on('error', (err) => {
-                    reject(new Error(`LDAP search error: ${err.message}`));
-                });
-
-                res.on('end', () => {
-                    resolve(user);
-                });
+            client.on('connectTimeout', () => unreachable('connection timed out'));
+            client.on('connectError', (err) => unreachable(err.message));
+            client.on('error', (err) => {
+                reject(new Error(`LDAP connection error: ${err.message}`));
             });
-        });
-    } finally {
-        client.unbind(() => {});
-    }
-}
 
-/**
- * Authenticate a user by attempting an LDAP bind with their credentials.
- * @param {string} username - sAMAccountName
- * @param {string} password - User's password
- * @returns {Promise<object>} - User object from AD
- */
-async function authenticateUser(username, password) {
-    // First, find the user to get their DN
-    const user = await findUser(username);
-    if (!user) {
-        throw new Error('User not found');
-    }
-
-    // Check if account is disabled (bit 2 of userAccountControl)
-    const uac = parseInt(user.userAccountControl, 10);
-    if (uac && (uac & 2) !== 0) {
-        throw new Error('Account is disabled');
-    }
-
-    // Check if account is locked out
-    if (user.lockoutTime && parseInt(user.lockoutTime, 10) > 0) {
-        throw new Error('Account is locked out');
-    }
-
-    // Attempt bind with user's credentials
-    const userClient = await bindClient(user.dn, password);
-    userClient.unbind(() => {});
-
-    return user;
-}
-
-/**
- * Change a user's password in AD.
- * Requires the service account to have "Reset Password" permission.
- * @param {string} userDN - The user's distinguished name
- * @param {string} newPassword - The new password
- * @returns {Promise<void>}
- */
-async function changePassword(userDN, newPassword) {
-    if (!isEncrypted()) {
-        throw new Error('LDAP connection error: password changes require LDAPS or AD_STARTTLS=true');
-    }
-
-    const client = await bindServiceAccount();
-
-    try {
-        // AD requires the password to be enclosed in quotes and UTF-16LE encoded
-        const encodedPassword = Buffer.from(`"${newPassword}"`, 'utf16le');
-
-        const change = new ldap.Change({
-            operation: 'replace',
-            modification: new ldap.Attribute({
-                type: 'unicodePwd',
-                values: [encodedPassword],
-            }),
-        });
-
-        // Must await: the finally block would otherwise close the connection before AD replies
-        return await new Promise((resolve, reject) => {
-            client.modify(userDN, change, (err) => {
+            const doBind = () => client.bind(dn, password, (err) => {
                 if (err) {
-                    // Parse common AD password policy errors
-                    if (err.message && err.message.includes('0000052D')) {
-                        reject(new Error('Password does not meet the domain password policy requirements'));
-                    } else if (err.message && err.message.includes('00000056')) {
-                        reject(new Error('Current password is incorrect'));
+                    client.destroy();
+                    if (err.code === 49) {
+                        reject(new Error('Invalid credentials'));
                     } else {
-                        reject(new Error(`Failed to change password: ${err.message}`));
+                        reject(new Error(`LDAP bind failed: ${err.message}`));
                     }
                 } else {
-                    resolve();
+                    resolve(client);
                 }
             });
+
+            if (!useStartTls()) {
+                doBind();
+                return;
+            }
+
+            // Credentials must never be sent before the TLS upgrade completes
+            client.once('connect', () => {
+                client.starttls(ad.tlsOptions, [], (err) => {
+                    if (err) {
+                        client.destroy();
+                        reject(new Error(`LDAP connection error: StartTLS failed: ${err.message}`));
+                        return;
+                    }
+                    doBind();
+                });
+            });
         });
-    } finally {
-        client.unbind(() => {});
     }
-}
 
-/**
- * Change password with old password verification (for authenticated change).
- * User must provide current password.
- * @param {string} userDN - User's DN
- * @param {string} oldPassword - Current password
- * @param {string} newPassword - New password
- * @returns {Promise<void>}
- */
-async function changePasswordWithOld(userDN, oldPassword, newPassword) {
-    // First verify the old password by binding as the user
-    const userClient = await bindClient(userDN, oldPassword);
-    userClient.unbind(() => {});
+    function useStartTls() {
+        return ad.startTls && ad.url.startsWith('ldap://');
+    }
 
-    // Then change the password using service account
-    await changePassword(userDN, newPassword);
+    function isEncrypted() {
+        return ad.url.startsWith('ldaps://') || useStartTls();
+    }
+
+    /**
+     * Bind with the service account credentials.
+     * @returns {Promise<ldap.Client>}
+     */
+    async function bindServiceAccount() {
+        return bindClient(ad.bindDN, ad.bindPassword);
+    }
+
+    /**
+     * True if the bind account is protected by AdminSDHolder (adminCount=1), i.e. a member of
+     * Domain/Enterprise Admins, Administrators, Account Operators, etc. (including nested).
+     */
+    async function isServiceAccountPrivileged() {
+        const client = await bindServiceAccount();
+        try {
+            return await new Promise((resolve, reject) => {
+                client.search(ad.bindDN, { scope: 'base', attributes: ['adminCount'] }, (err, res) => {
+                    if (err) return reject(new Error(`LDAP search failed: ${err.message}`));
+                    let privileged = false;
+                    res.on('searchEntry', (entry) => {
+                        const attr = (entry.pojo?.attributes || entry.attributes || []).find((a) => a.type === 'adminCount');
+                        privileged = attr?.values?.[0] === '1';
+                    });
+                    res.on('error', (e) => reject(new Error(`LDAP search error: ${e.message}`)));
+                    res.on('end', () => resolve(privileged));
+                });
+            });
+        } finally {
+            client.unbind(() => {});
+        }
+    }
+
+    /**
+     * Search for a user in AD by sAMAccountName.
+     * @param {string} username - sAMAccountName
+     * @returns {Promise<object|null>} - User entry or null
+     */
+    async function findUser(username) {
+        const client = await bindServiceAccount();
+
+        try {
+            return await new Promise((resolve, reject) => {
+                const searchOptions = {
+                    scope: 'sub',
+                    filter: `(&(objectClass=user)(objectCategory=person)(sAMAccountName=${escapeFilterValue(username)}))`,
+                    attributes: [
+                        'dn', 'sAMAccountName', 'displayName', 'mail',
+                        'userPrincipalName', 'memberOf', 'userAccountControl',
+                        'pwdLastSet', 'lockoutTime', 'adminCount',
+                    ],
+                };
+
+                client.search(ad.userSearchBase, searchOptions, (err, res) => {
+                    if (err) {
+                        reject(new Error(`LDAP search failed: ${err.message}`));
+                        return;
+                    }
+
+                    let user = null;
+
+                    res.on('searchEntry', (entry) => {
+                        const attrs = {};
+                        // ldapjs v3 returns pojo entries
+                        if (entry.pojo) {
+                            entry.pojo.attributes.forEach(attr => {
+                                attrs[attr.type] = attr.values.length === 1 ? attr.values[0] : attr.values;
+                            });
+                            attrs.dn = entry.pojo.objectName;
+                        } else {
+                            // Fallback for older versions
+                            attrs.dn = entry.objectName || entry.dn?.toString();
+                            for (const attr of entry.attributes || []) {
+                                const vals = attr.values || attr._vals?.map(v => v.toString());
+                                attrs[attr.type] = vals?.length === 1 ? vals[0] : vals;
+                            }
+                        }
+                        user = attrs;
+                    });
+
+                    res.on('error', (err) => {
+                        reject(new Error(`LDAP search error: ${err.message}`));
+                    });
+
+                    res.on('end', () => {
+                        resolve(user);
+                    });
+                });
+            });
+        } finally {
+            client.unbind(() => {});
+        }
+    }
+
+    /**
+     * Authenticate a user by attempting an LDAP bind with their credentials.
+     * @param {string} username - sAMAccountName
+     * @param {string} password - User's password
+     * @returns {Promise<object>} - User object from AD
+     */
+    async function authenticateUser(username, password) {
+        // First, find the user to get their DN
+        const user = await findUser(username);
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        // Check if account is disabled (bit 2 of userAccountControl)
+        const uac = parseInt(user.userAccountControl, 10);
+        if (uac && (uac & 2) !== 0) {
+            throw new Error('Account is disabled');
+        }
+
+        // Check if account is locked out
+        if (user.lockoutTime && parseInt(user.lockoutTime, 10) > 0) {
+            throw new Error('Account is locked out');
+        }
+
+        // Attempt bind with user's credentials
+        const userClient = await bindClient(user.dn, password);
+        userClient.unbind(() => {});
+
+        return user;
+    }
+
+    /**
+     * Change a user's password in AD.
+     * Requires the service account to have "Reset Password" permission.
+     * @param {string} userDN - The user's distinguished name
+     * @param {string} newPassword - The new password
+     * @returns {Promise<void>}
+     */
+    async function changePassword(userDN, newPassword) {
+        if (!isEncrypted()) {
+            throw new Error('LDAP connection error: password changes require LDAPS or AD_STARTTLS=true');
+        }
+
+        const client = await bindServiceAccount();
+
+        try {
+            // AD requires the password to be enclosed in quotes and UTF-16LE encoded
+            const encodedPassword = Buffer.from(`"${newPassword}"`, 'utf16le');
+
+            const change = new ldap.Change({
+                operation: 'replace',
+                modification: new ldap.Attribute({
+                    type: 'unicodePwd',
+                    values: [encodedPassword],
+                }),
+            });
+
+            // Must await: the finally block would otherwise close the connection before AD replies
+            return await new Promise((resolve, reject) => {
+                client.modify(userDN, change, (err) => {
+                    if (err) {
+                        // ldapjs 3 drops AD's diagnostic text (it reads res.errorMessage, renamed diagnosticMessage),
+                        // so a policy rejection arrives as a bare "Unwilling To Perform" (code 53). On an encrypted
+                        // unicodePwd replace with Reset Password rights, 53 means the password policy (0000052D).
+                        if (err.code === 53 || (err.message && err.message.includes('0000052D'))) {
+                            reject(new Error('Password does not meet the domain password policy requirements'));
+                        } else if (err.message && err.message.includes('00000056')) {
+                            reject(new Error('Current password is incorrect'));
+                        } else {
+                            reject(new Error(`Failed to change password: ${err.message}`));
+                        }
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+        } finally {
+            client.unbind(() => {});
+        }
+    }
+
+    /**
+     * Change password with old password verification (for authenticated change).
+     * User must provide current password.
+     * @param {string} userDN - User's DN
+     * @param {string} oldPassword - Current password
+     * @param {string} newPassword - New password
+     * @returns {Promise<void>}
+     */
+    async function changePasswordWithOld(userDN, oldPassword, newPassword) {
+        // First verify the old password by binding as the user
+        const userClient = await bindClient(userDN, oldPassword);
+        userClient.unbind(() => {});
+
+        // Then change the password using service account
+        await changePassword(userDN, newPassword);
+    }
+
+    return {
+        name: ad.name,
+        findUser,
+        authenticateUser,
+        changePassword,
+        changePasswordWithOld,
+        isServiceAccountPrivileged,
+    };
 }
 
 /**
@@ -288,13 +305,19 @@ function isAdmin(user) {
     return groups.some(g => g.toLowerCase() === adminGroupDN);
 }
 
+function createSecondary(ad) {
+    if (!ad) return null;
+    if (ad.mode === 'windows') {
+        return require('./windowsDirectoryService').createWindowsDirectory(ad, escapeFilterValue);
+    }
+    return createDirectory(ad);
+}
+
 module.exports = config.ad.mock
     ? require('./mockLdapService')
     : {
-        findUser,
-        authenticateUser,
-        changePassword,
-        changePasswordWithOld,
+        ...createDirectory(config.ad),
         isAdmin,
-        isServiceAccountPrivileged,
+        // Second domain kept in sync on every password change/reset (null when AD2_URL is unset)
+        secondary: createSecondary(config.ad.secondary),
     };

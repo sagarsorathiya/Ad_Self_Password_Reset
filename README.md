@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 18+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 71 automated tests (`node:test`)
+- Tests: 82 automated tests (`node:test`)
 
 ---
 
@@ -35,6 +35,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 | Enrollment | 3 security questions (answers hashed with bcrypt) and an authenticator app (QR code or manual key). |
 | Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes. |
 | Change password | For signed-in users. The current password is checked against AD. |
+| Second domain (optional) | Every change and reset also sets the same password in a second domain (same username), e.g. a separate mail domain. See §5.1. |
 | Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, audit log viewer, security question management, password exception list (blocked words). |
 | Security | Rate limiting, account lockout, TOTP replay protection, refresh-token revocation, audit log, CSP/Helmet. |
 
@@ -101,6 +102,14 @@ All settings live in `.env`, which is git-ignored.
 | `AD_USER_SEARCH_BASE` | – | OU searched for users, e.g. `OU=Staff,DC=corp,DC=local` |
 | `AD_ADMIN_GROUP` | – | Full DN of the portal admin group |
 | `AD_TLS_REJECT_UNAUTHORIZED` | `true` | Only set `false` for testing. Trust your CA instead (see §14). |
+| `AD_DOMAIN_LABEL` | `Active Directory` | Name of the first domain in user messages (useful with a second domain) |
+| `AD2_MODE` | `ldap` | Second domain (see §5.1): `ldap` = LDAPS/StartTLS with certificate checking; `windows` = Windows ADSI with Kerberos/NTLM sign-and-seal on port 389, no certificate (Windows servers only) |
+| `AD2_URL` | – | `ldap` mode: second domain URL. Empty (and no `AD2_SERVER`) = disabled. |
+| `AD2_SERVER` | – | `windows` mode: a **writable** DC of the second domain (hostname preferred, so Kerberos is used) |
+| `AD2_STARTTLS` / `AD2_CA_CERT_PATH` / `AD2_TLS_SERVERNAME` / `AD2_TLS_REJECT_UNAUTHORIZED` | – | Same meaning as the `AD_*` settings, for the second domain |
+| `AD2_BIND_DN` / `AD2_BIND_PASSWORD` | – | Service account in the second domain (*Reset password* delegation only). In `windows` mode use `DOMAIN\user` or `user@domain` instead of a DN. |
+| `AD2_USER_SEARCH_BASE` | – | OU searched for the matching user in the second domain (`windows` mode: empty = whole domain) |
+| `AD2_DOMAIN_LABEL` | `Secondary domain` | Name of the second domain in user messages, e.g. `Mail` |
 | `PG_HOST` / `PG_PORT` / `PG_DATABASE` / `PG_USER` / `PG_PASSWORD` | – | PostgreSQL connection |
 | `PG_SSL` / `PG_SSL_CA_PATH` | `false` / – | Encrypt the database connection (use it when PostgreSQL is on another server) |
 | `PG_TEST_DATABASE` | `<PG_DATABASE>_test` | Database used by the integration tests (the name must end in `_test`) |
@@ -112,7 +121,8 @@ All settings live in `.env`, which is git-ignored.
 | `RATE_LIMIT_GENERAL_MAX` | `100` | Limit for all API calls per IP in each window. On an intranet behind NAT or a shared proxy, raise it (e.g. `1000`). |
 | `RESET_POLICY` | `both` | `both`: security questions **and** authenticator code (recommended). `totp_only`: authenticator only. `either`: one of the two. |
 | `HTTP_REDIRECT_PORT` | – | Optional plain-HTTP port that only redirects to HTTPS (e.g. `80` with `PORT=443`) |
-| `AD_ALLOW_PRIVILEGED_BIND` | `false` | Production refuses to start if `AD_BIND_DN` is privileged (adminCount=1). Temporary override only. |
+| `AD_ALLOW_PRIVILEGED_BIND` | `false` | Production refuses to start if `AD_BIND_DN` or `AD2_BIND_DN` is privileged (adminCount=1). Override only; it applies to both accounts unless `AD2_ALLOW_PRIVILEGED_BIND` is set. |
+| `AD2_ALLOW_PRIVILEGED_BIND` | – | Override for `AD2_BIND_DN` only. Set `true` (with `AD_ALLOW_PRIVILEGED_BIND=false`) to keep the first-domain check active while the second domain uses a privileged account. |
 
 ### Encrypting secrets in `.env`
 Run `.\scripts\protect-secret.ps1` to encrypt every plain-text secret in `.env` (`AD_BIND_PASSWORD`, `PG_PASSWORD`, `JWT_SECRET`, `TOTP_ENCRYPTION_KEY`, `TLS_PFX_PASSPHRASE`) with **Windows DPAPI**. Values become `dpapi:…` and are decrypted in memory at startup.
@@ -145,6 +155,35 @@ Run `.\scripts\protect-secret.ps1` to encrypt every plain-text secret in `.env` 
    Do **not** delegate on privileged OUs such as Domain Admins or service accounts. Protected accounts (adminCount=1) are covered by AdminSDHolder and won't inherit this delegation anyway, which is intended.
 4. **Create the admin group**, e.g. `CN=PasswordResetAdmins,OU=Groups,DC=corp,DC=local`, and add help-desk staff. Membership must be **direct**; nested groups aren't resolved.
 5. Fill in `AD_*` in `.env`, set `AD_MOCK=false`, and restart.
+
+### 5.1 Second domain (optional password sync)
+
+If users have an account with the **same username** in a second domain (for example a separate mail domain), the portal can set the same password there on every change and reset, so no separate sync tool is needed.
+
+1. In the second domain, create a least-privilege service account with the same delegation as in step 3. You can run `scripts/setup-ad-service-account.ps1` there, but **without** `-WriteEnv`, because that would overwrite the `AD_*` values.
+2. Trust that domain's CA (`node scripts/export-ad-ca.js` with a temporary `.env` pointing at it, or copy its root CA PEM to `certs/`).
+3. Set `AD2_URL`, `AD2_BIND_DN`, `AD2_BIND_PASSWORD` (then `.\scripts\protect-secret.ps1`), `AD2_USER_SEARCH_BASE`, `AD2_CA_CERT_PATH`, and optionally `AD_DOMAIN_LABEL` / `AD2_DOMAIN_LABEL` (e.g. `Desktop` / `Mail`). Restart.
+
+**Without a certificate (`AD2_MODE=windows`).** When the second domain's DCs have no LDAPS certificate, a Windows portal server can write the password through Windows ADSI instead, the way *AD Users and Computers* does: Kerberos/NTLM sign-and-seal on port 389 (AD refuses password writes on connections that aren't encrypted). Skip step 2 and set:
+
+```
+AD2_MODE=windows
+AD2_SERVER=dc01.mail.example      # a writable DC (nltest /dsgetdc:<domain> /writable), not an RODC
+AD2_BIND_DN=MAIL\svc-pwreset      # or svc-pwreset@mail.example
+AD2_BIND_PASSWORD=...             # then .\scripts\protect-secret.ps1
+AD2_USER_SEARCH_BASE=             # optional, empty = whole domain
+```
+
+The portal server needs port 389 (and 88 for Kerberos) to that DC. Use its hostname so Kerberos is used: with an IP address or without a trust, Windows falls back to NTLM, which still encrypts the password but authenticates the DC less strongly than a certificate. Credentials and passwords reach the helper only through stdin. Keep PowerShell *Module Logging* (Group Policy, event 4103) turned off on the portal server: it records command arguments, which would include these passwords. Script block logging and transcription are fine.
+
+How it behaves:
+- Sign-in, the current-password check and admin rights use the **first** domain only.
+- Before anything is written, the portal looks the user up in the second domain. If that domain can't be reached, **nothing is changed** and the user is asked to try again (a reset token stays valid).
+- The first domain is written first, then the second. Users without an account in the second domain are skipped.
+- Accounts are matched by username only, so the portal never writes a second-domain account that is disabled, protected (`adminCount=1`, e.g. Domain Admins) or the `AD2_BIND_DN` account itself. These are skipped like missing accounts, and the audit log records the reason.
+- If the second domain rejects the password (for example because its policy is stricter), the first domain has already changed. The user is told that only one domain was updated and is asked to use *Forgot password* with a password that meets both policies. Each outcome is recorded in the audit log as `password_sync`.
+- Use the same (or compatible) password policies in both domains to avoid partial changes.
+- To check it works: the startup log shows `Sync to: <label> (...)`, and after a change the audit log has a `password_sync` entry `<label>: password updated`.
 
 ## 6. PostgreSQL setup
 
@@ -274,6 +313,8 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 | Security question visibility | Answers exist only as bcrypt hashes and are never returned by any endpoint (covered by a test); unknown or unenrolled accounts get stable decoy questions and the same errors and timing as wrong answers |
 | XSS | Strict CSP (`script-src 'self'`, no inline scripts); all dynamic content escaped or set with `textContent` |
 | SQL injection | Parameterized queries only (covered by a test) |
+| Second-domain account takeover by name | Sync never writes a second-domain account that is disabled, protected (`adminCount=1`) or the `AD2_BIND_DN` account; the second domain is looked up before anything is written, and every outcome is audited (`password_sync`) |
+| Secrets passed to the Windows helper | `AD2_MODE=windows` sends credentials and passwords to PowerShell over stdin only (never the command line), and the connection is sealed (sign-and-seal); keep PowerShell *Module Logging* (event 4103) disabled on the portal server, because it would record command arguments |
 | Misconfiguration | Production refuses to start with a weak or missing `JWT_SECRET`/`TOTP_ENCRYPTION_KEY` or with `AD_MOCK` |
 
 ## 11. API reference
@@ -313,7 +354,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (71 tests)
+npm test                   # everything (82 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
@@ -334,6 +375,9 @@ The integration tests start the app on a random port with the mock AD and reset 
 | `Directory server unreachable: connection timed out` | The port is blocked or the service isn't listening (common: 636 closed). Check with `Test-NetConnection <dc> -Port 636`, or use 389 with `AD_STARTTLS=true`. |
 | `Hostname/IP does not match certificate` | `AD_URL` uses an IP address. Use the DC hostname, or set `AD_TLS_SERVERNAME`. |
 | `password changes require LDAPS or AD_STARTTLS=true` | `AD_URL` is plain `ldap://` without StartTLS. |
+| Portal stops right after start (reverse proxy shows 502) after adding `AD2_*` settings | Startup refuses incomplete second-domain settings (`AD2_MODE=windows` needs `AD2_SERVER`, `AD2_BIND_DN`, `AD2_BIND_PASSWORD`) and, in production, a privileged `AD2_BIND_DN`. The log shows the reason. Comment out `AD2_MODE`/`AD2_SERVER` to start without the sync, then fix the settings. |
+| No `Sync to:` line in the startup log | The second domain is disabled: `AD2_URL` (ldap mode) or `AD2_SERVER` (windows mode) is not set, or commented out. |
+| `... is a read-only domain controller; set AD2_SERVER to a writable DC` | `AD2_SERVER` points at an RODC. Find a writable DC with `nltest /dsgetdc:<domain> /writable`. |
 | `Failed to change password: ... 00002077` / unwilling to perform | Password writes need LDAPS. Check `AD_URL` starts with `ldaps://`. |
 | Password change fails with an access error | The service account lacks the *Reset password* delegation on that OU, or the user is protected by AdminSDHolder. |
 | "does not meet the domain password policy" | AD rejected the password (length, complexity, history, or minimum password age). |
@@ -357,6 +401,7 @@ The integration tests start the app on a random port with the mock AD and reset 
 - **Access tokens** stay valid for up to 15 minutes after logout or lock; refresh tokens are revoked immediately.
 - **Password changes outside the portal** (AD Users & Computers, Ctrl+Alt+Del) don't end existing portal sessions. After *Change Password* in the portal, the browser signs the user out.
 - **Users appear in the admin list** only after their first sign-in to the portal.
+- **Second domain:** the two domains can't be updated atomically. If the second domain rejects a password the first already accepted, the domains differ until the user resets again (see §5.1). Passwords changed outside the portal aren't synced.
 
 ## License
 

@@ -20,20 +20,34 @@ function createServer() {
     return https.createServer({ ...tlsOptions, minVersion: 'TLSv1.2' }, app);
 }
 
-async function checkServiceAccount() {
-    if (config.ad.mock) return;
+// AD2_ALLOW_PRIVILEGED_BIND overrides for the second domain only; when it is unset or empty,
+// AD_ALLOW_PRIVILEGED_BIND covers both domains (earlier behaviour)
+function privilegedBindAllowed(prefix) {
+    const own = process.env[`${prefix}_ALLOW_PRIVILEGED_BIND`];
+    if (prefix === 'AD2' && !own) return process.env.AD_ALLOW_PRIVILEGED_BIND === 'true';
+    return own === 'true';
+}
+
+async function checkServiceAccount(directory, prefix, bindDN) {
+    const envName = `${prefix}_BIND_DN`;
     try {
-        if (!(await ldapService.isServiceAccountPrivileged())) return;
-        const msg = `AD_BIND_DN (${config.ad.bindDN}) is a privileged account (adminCount=1, e.g. Domain Admins). `
+        if (!(await directory.isServiceAccountPrivileged())) return;
+        const msg = `${envName} (${bindDN}) is a privileged account (adminCount=1, e.g. Domain Admins). `
             + 'Use a least-privilege service account: scripts/setup-ad-service-account.ps1';
-        if (config.server.env === 'production' && process.env.AD_ALLOW_PRIVILEGED_BIND !== 'true') {
+        if (config.server.env === 'production' && !privilegedBindAllowed(prefix)) {
             console.error(`FATAL: ${msg}`);
             process.exit(1);
         }
         console.warn(`WARNING: ${msg}`);
     } catch (err) {
-        console.warn(`WARNING: Could not verify the service account: ${err.message}`);
+        console.warn(`WARNING: Could not verify the ${envName} service account: ${err.message}`);
     }
+}
+
+function checkServiceAccounts() {
+    if (config.ad.mock) return;
+    checkServiceAccount(ldapService, 'AD', config.ad.bindDN);
+    if (ldapService.secondary) checkServiceAccount(ldapService.secondary, 'AD2', config.ad.secondary.bindDN);
 }
 
 async function cleanupExpiredTokens() {
@@ -54,6 +68,12 @@ server.listen(PORT, config.server.host, () => {
     console.log(`  URL:         ${scheme}://${config.server.host || 'localhost'}:${PORT}`);
     console.log(`  Environment: ${config.server.env}`);
     console.log(`  AD Server:   ${config.ad.mock ? 'MOCK (in-memory)' : config.ad.url}`);
+    if (config.ad.secondary) {
+        const target = config.ad.secondary.mode === 'windows'
+            ? `${config.ad.secondary.server}, Windows sign-and-seal`
+            : config.ad.secondary.url;
+        console.log(`  Sync to:     ${config.ad.secondary.name} (${config.ad.mock ? 'MOCK' : target})`);
+    }
     console.log(`  Trust proxy: ${config.server.trustProxy}`);
     console.log('');
     if (config.ad.mock) {
@@ -62,7 +82,7 @@ server.listen(PORT, config.server.host, () => {
     if (!config.server.https && config.server.env === 'production' && config.server.trustProxy === false) {
         console.warn('WARNING: Serving plain HTTP in production. Configure TLS_* or run behind an HTTPS reverse proxy.');
     }
-    checkServiceAccount();
+    checkServiceAccounts();
 });
 
 // Optional plain-HTTP listener that only redirects to HTTPS (no content is served over HTTP)

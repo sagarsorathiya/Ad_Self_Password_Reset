@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Without -Name: encrypts every secret in .env that is still plain text
-    (AD_BIND_PASSWORD, PG_PASSWORD, JWT_SECRET, TOTP_ENCRYPTION_KEY, TLS_PFX_PASSPHRASE).
+    (AD_BIND_PASSWORD, AD2_BIND_PASSWORD, PG_PASSWORD, JWT_SECRET, TOTP_ENCRYPTION_KEY, TLS_PFX_PASSPHRASE).
     With -Name: prompts (hidden input) for one value and writes it encrypted.
 
     Scope:
@@ -26,7 +26,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
-$secretKeys = 'AD_BIND_PASSWORD', 'PG_PASSWORD', 'JWT_SECRET', 'TOTP_ENCRYPTION_KEY', 'TLS_PFX_PASSPHRASE'
+$secretKeys = 'AD_BIND_PASSWORD', 'AD2_BIND_PASSWORD', 'PG_PASSWORD', 'JWT_SECRET', 'TOTP_ENCRYPTION_KEY', 'TLS_PFX_PASSPHRASE'
 
 function Protect([string]$plain) {
     if ($Machine) {

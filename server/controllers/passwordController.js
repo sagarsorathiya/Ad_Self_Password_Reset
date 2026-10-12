@@ -7,6 +7,7 @@ const db = require('../config/db');
 const ldapService = require('../services/ldapService');
 const totpService = require('../services/totpService');
 const passwordExceptionService = require('../services/passwordExceptionService');
+const passwordSyncService = require('../services/passwordSyncService');
 const { logAudit } = require('./authController');
 
 const INCORRECT_ANSWERS_MESSAGE = 'One or more answers are incorrect. Please try again.';
@@ -67,17 +68,29 @@ async function changePassword(req, res) {
             return res.status(400).json({ success: false, message: exceptionMessage(violation) });
         }
 
+        // Nothing is written unless the second domain (if configured) is reachable
+        const syncPlan = await passwordSyncService.prepare(req.user.username);
+
         // Change password in AD (verifies current password first)
         await ldapService.changePasswordWithOld(req.user.dn, currentPassword, newPassword);
 
         await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, true);
 
+        const sync = await syncSecondary(syncPlan, newPassword, req.user.userId, req.user.username, 'authenticated', req);
+
         res.json({
             success: true,
-            message: 'Password changed successfully. Please log in with your new password.',
+            message: sync?.status === 'failed'
+                ? syncFailureMessage(sync)
+                : 'Password changed successfully. Please log in with your new password.',
+            data: { sync: publicSyncResult(sync) },
         });
     } catch (err) {
         await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, false, err.message);
+
+        if (err instanceof passwordSyncService.SecondaryUnavailableError) {
+            return res.status(503).json({ success: false, message: unavailableMessage(err) });
+        }
 
         if (err.message.includes('password policy') || err.message.includes('052D')) {
             return res.status(400).json({
@@ -522,6 +535,15 @@ async function setPassword(req, res) {
             return res.status(400).json({ success: false, message: exceptionMessage(violation) });
         }
 
+        let syncPlan;
+        try {
+            syncPlan = await passwordSyncService.prepare(decoded.username);
+        } catch (err) {
+            if (!(err instanceof passwordSyncService.SecondaryUnavailableError)) throw err;
+            await logAudit(decoded.userId, decoded.username, 'password_reset', decoded.method || 'unknown', req, false, err.message);
+            return res.status(503).json({ success: false, message: unavailableMessage(err) });
+        }
+
         // Claim the token atomically so concurrent requests cannot both use it
         const claim = await db.query(
             `INSERT INTO used_reset_tokens (token_jti, user_id, expires_at) VALUES ($1, $2, $3)
@@ -558,9 +580,14 @@ async function setPassword(req, res) {
 
         await logAudit(decoded.userId, decoded.username, 'password_reset', decoded.method || 'unknown', req, true);
 
+        const sync = await syncSecondary(syncPlan, newPassword, decoded.userId, decoded.username, decoded.method || 'unknown', req);
+
         res.json({
             success: true,
-            message: 'Password reset successfully. You may now log in with your new password.',
+            message: sync?.status === 'failed'
+                ? syncFailureMessage(sync)
+                : 'Password reset successfully. You may now log in with your new password.',
+            data: { sync: publicSyncResult(sync) },
         });
     } catch (err) {
         console.error('[Password] Set password error:', err);
@@ -580,6 +607,42 @@ async function setPassword(req, res) {
 }
 
 // ---- Helper functions ----
+
+/**
+ * Write the new password to the second domain (after the first domain accepted it) and audit the outcome.
+ */
+async function syncSecondary(plan, newPassword, userId, username, method, req) {
+    const sync = await passwordSyncService.apply(plan, newPassword);
+    if (!sync) return null;
+
+    const details = {
+        synced: `${sync.domain}: password updated`,
+        not_found: sync.reason
+            ? `${sync.domain}: ${sync.reason}, skipped`
+            : `${sync.domain}: no account with this username, skipped`,
+        failed: `${sync.domain}: ${sync.error}`,
+    }[sync.status];
+    await logAudit(userId, username, 'password_sync', method, req, sync.status !== 'failed', details);
+    if (sync.status === 'failed') console.error(`[Password] Sync to ${sync.domain} failed: ${sync.error}`);
+    return sync;
+}
+
+// What the browser may see: no server addresses or raw LDAP errors
+function publicSyncResult(sync) {
+    return sync ? { domain: sync.domain, status: sync.status } : null;
+}
+
+function syncFailureMessage(sync) {
+    const reason = /password policy|052D/.test(sync.error)
+        ? `it does not meet the ${sync.domain} password policy`
+        : `${sync.domain} could not be updated`;
+    return `Your password was changed in ${config.ad.name}, but NOT in ${sync.domain} because ${reason}. `
+        + 'Use Forgot password to set a password that meets the requirements of both, or contact IT.';
+}
+
+function unavailableMessage(err) {
+    return `${err.domain} is currently unavailable, so your password was not changed. Please try again later.`;
+}
 
 function exceptionMessage({ term, match_type: matchType }) {
     return matchType === 'exact'

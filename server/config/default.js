@@ -10,6 +10,39 @@ function parseTrustProxy(value) {
     return /^\d+$/.test(value) ? parseInt(value, 10) : value;
 }
 
+// Connection settings for one domain, read from <prefix>_URL, <prefix>_BIND_DN, ...
+function buildAdConfig(prefix, defaultName) {
+    const env = (name) => process.env[`${prefix}_${name}`];
+    return {
+        name: env('DOMAIN_LABEL') || defaultName,
+        url: env('URL') || 'ldap://localhost:389',
+        baseDN: env('BASE_DN') || 'DC=domain,DC=com',
+        bindDN: env('BIND_DN') || '',
+        bindPassword: env('BIND_PASSWORD') || '',
+        userSearchBase: env('USER_SEARCH_BASE') || 'OU=Users,DC=domain,DC=com',
+        // TLS options for LDAPS / StartTLS
+        tlsOptions: {
+            rejectUnauthorized: env('TLS_REJECT_UNAUTHORIZED') !== 'false',
+            // Internal CA root (PEM) that issued the DC certificate
+            ca: env('CA_CERT_PATH')
+                ? [fs.readFileSync(path.resolve(PROJECT_ROOT, env('CA_CERT_PATH')))]
+                : undefined,
+            // DC hostname on its certificate; needed when the URL uses an IP address
+            servername: env('TLS_SERVERNAME') || undefined,
+        },
+        // Upgrade ldap:// (389) connections to TLS; AD refuses password writes without encryption
+        startTls: env('STARTTLS') === 'true',
+        // 'ldap': ldapjs over LDAPS/StartTLS. 'windows': ADSI with Kerberos/NTLM sign-and-seal on 389 (no certificate)
+        mode: env('MODE') || 'ldap',
+        // windows mode: the writable DC to use (hostname preferred so Kerberos is used)
+        server: env('SERVER') || '',
+        // windows mode: empty = the domain root (defaultNamingContext)
+        rawSearchBase: env('USER_SEARCH_BASE') || '',
+    };
+}
+
+const isAdEncrypted = (ad) => ad.url.startsWith('ldaps://') || (ad.startTls && ad.url.startsWith('ldap://'));
+
 const config = {
     server: {
         port: parseInt(process.env.PORT, 10) || 3000,
@@ -27,26 +60,13 @@ const config = {
     },
 
     ad: {
-        url: process.env.AD_URL || 'ldap://localhost:389',
-        baseDN: process.env.AD_BASE_DN || 'DC=domain,DC=com',
-        bindDN: process.env.AD_BIND_DN || '',
-        bindPassword: process.env.AD_BIND_PASSWORD || '',
-        userSearchBase: process.env.AD_USER_SEARCH_BASE || 'OU=Users,DC=domain,DC=com',
+        ...buildAdConfig('AD', 'Active Directory'),
         adminGroup: process.env.AD_ADMIN_GROUP || 'CN=PasswordResetAdmins,OU=Groups,DC=domain,DC=com',
-        // TLS options for LDAPS / StartTLS
-        tlsOptions: {
-            rejectUnauthorized: process.env.AD_TLS_REJECT_UNAUTHORIZED !== 'false',
-            // Internal CA root (PEM) that issued the DC certificate
-            ca: process.env.AD_CA_CERT_PATH
-                ? [fs.readFileSync(path.resolve(PROJECT_ROOT, process.env.AD_CA_CERT_PATH))]
-                : undefined,
-            // DC hostname on its certificate; needed when AD_URL uses an IP address
-            servername: process.env.AD_TLS_SERVERNAME || undefined,
-        },
-        // Upgrade ldap:// (389) connections to TLS; AD refuses password writes without encryption
-        startTls: process.env.AD_STARTTLS === 'true',
         // In-memory directory for local development/testing without a domain controller
         mock: process.env.AD_MOCK === 'true',
+        // Optional second domain (AD2_*) that receives the same password on every change and reset.
+        // Users are matched by sAMAccountName; sign-in and admin rights always use the first domain.
+        secondary: process.env.AD2_URL || process.env.AD2_SERVER ? buildAdConfig('AD2', 'Secondary domain') : null,
     },
 
     pg: {
@@ -109,9 +129,25 @@ if (config.totp.encryptionKey && !/^[0-9a-fA-F]{64}$/.test(config.totp.encryptio
 }
 
 // User passwords are sent in every bind; never talk to a real directory unencrypted
-const adEncrypted = config.ad.url.startsWith('ldaps://') || (config.ad.startTls && config.ad.url.startsWith('ldap://'));
-if (!config.ad.mock && !adEncrypted) {
+if (!config.ad.mock && !isAdEncrypted(config.ad)) {
     throw new Error('AD connection must be encrypted: use ldaps:// or set AD_STARTTLS=true with ldap://.');
+}
+const secondary = config.ad.secondary;
+if (secondary && !['ldap', 'windows'].includes(secondary.mode)) {
+    throw new Error('AD2_MODE must be ldap or windows.');
+}
+if (!config.ad.mock && secondary?.mode === 'ldap' && !isAdEncrypted(secondary)) {
+    throw new Error('AD2 connection must be encrypted: use ldaps:// or set AD2_STARTTLS=true with ldap://.');
+}
+// windows mode is encrypted by Kerberos/NTLM sealing (the helper requests it and the bind fails without it)
+if (!config.ad.mock && secondary?.mode === 'windows') {
+    if (process.platform !== 'win32') throw new Error('AD2_MODE=windows requires Windows.');
+    if (!secondary.server || !secondary.bindDN || !secondary.bindPassword) {
+        throw new Error('AD2_MODE=windows requires AD2_SERVER, AD2_BIND_DN (DOMAIN\\user or user@domain) and AD2_BIND_PASSWORD.');
+    }
+    if (/^CN=/i.test(secondary.bindDN)) {
+        throw new Error('AD2_MODE=windows: set AD2_BIND_DN to DOMAIN\\user or user@domain, not a distinguished name.');
+    }
 }
 
 if (config.server.env === 'production') {
@@ -120,6 +156,9 @@ if (config.server.env === 'production') {
     }
     if (!config.ad.tlsOptions.rejectUnauthorized) {
         throw new Error('AD_TLS_REJECT_UNAUTHORIZED=false is not allowed in production; trust the CA via AD_CA_CERT_PATH.');
+    }
+    if (secondary?.mode === 'ldap' && !secondary.tlsOptions.rejectUnauthorized) {
+        throw new Error('AD2_TLS_REJECT_UNAUTHORIZED=false is not allowed in production; trust the CA via AD2_CA_CERT_PATH.');
     }
     if (!config.server.https && config.server.trustProxy === false) {
         throw new Error('Production requires HTTPS: set TLS_PFX_PATH (or TLS_CERT_PATH/TLS_KEY_PATH), or TRUST_PROXY when an HTTPS reverse proxy terminates TLS.');

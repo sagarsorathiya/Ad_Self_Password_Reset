@@ -38,17 +38,23 @@
 
         setButtonLoading(submitBtn, true, 'Updating...');
         try {
-            await api('POST', '/api/password/change', {
+            const res = await api('POST', '/api/password/change', {
                 currentPassword: current.value,
                 newPassword: next.value,
                 confirmPassword: confirm.value,
             });
             form.reset();
-            showToast('Password changed successfully. Signing you out...', 'success');
+            // The password changed in the main domain but the second domain rejected it: give time to read why
+            const partial = res.data?.sync?.status === 'failed';
+            if (partial) {
+                showToast(`${res.message} Signing you out...`, 'warning', 12000);
+            } else {
+                showToast('Password changed successfully. Signing you out...', 'success');
+            }
             setTimeout(() => {
                 clearToken();
                 window.location.href = '/index.html?changed=1';
-            }, 2000);
+            }, partial ? 12000 : 2000);
         } catch (err) {
             if (err.status === 401 && err.code !== 'SESSION_EXPIRED') {
                 setFieldError(current, err.message);
