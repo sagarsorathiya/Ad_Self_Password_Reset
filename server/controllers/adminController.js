@@ -1,11 +1,14 @@
 const db = require('../config/db');
 const { MATCH_TYPES } = require('../services/passwordExceptionService');
-const { logAudit } = require('./authController');
+const { logAudit, getOrCreateUser } = require('./authController');
+const ldapService = require('../services/ldapService');
+
+const UAC_ACCOUNT_DISABLED = 2;
 
 /**
  * GET /api/admin/users
  * List all users with enrollment status.
- * Query params: page, limit, search, filter (all|enrolled|pending|locked)
+ * Query params: page, limit, search, filter (all|enrolled|pending|locked|admins)
  */
 async function getUsers(req, res) {
     try {
@@ -35,6 +38,9 @@ async function getUsers(req, res) {
                 case 'locked':
                     whereClause += `${connector} locked = TRUE`;
                     break;
+                case 'admins':
+                    whereClause += `${connector} is_portal_admin = TRUE`;
+                    break;
             }
         }
 
@@ -44,7 +50,7 @@ async function getUsers(req, res) {
         params.push(limit, offset);
         const result = await db.query(
             `SELECT id, username, display_name, email, is_enrolled, totp_enabled,
-                    security_questions_set, locked, failed_attempts, created_at, updated_at
+                    security_questions_set, locked, is_portal_admin, failed_attempts, created_at, updated_at
              FROM users${whereClause}
              ORDER BY created_at DESC
              LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -227,6 +233,126 @@ async function toggleLock(req, res) {
         res.status(500).json({
             success: false,
             message: 'Failed to update user lock status.',
+        });
+    }
+}
+
+/**
+ * PUT /api/admin/users/:id/admin
+ * Grant or revoke portal admin rights. Members of AD_ADMIN_GROUP stay admins regardless.
+ * Body: { isAdmin: true/false }
+ */
+async function setPortalAdmin(req, res) {
+    try {
+        const userId = parseInt(req.params.id, 10);
+        const { isAdmin } = req.body;
+
+        if (typeof isAdmin !== 'boolean') {
+            return res.status(400).json({
+                success: false,
+                message: 'The "isAdmin" field must be true or false.',
+            });
+        }
+
+        if (!isAdmin && userId === req.user.userId) {
+            return res.status(400).json({
+                success: false,
+                message: 'You cannot remove your own admin rights. Ask another admin.',
+            });
+        }
+
+        const result = await db.query(
+            'UPDATE users SET is_portal_admin = $1, updated_at = NOW() WHERE id = $2 RETURNING username',
+            [isAdmin, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found.',
+            });
+        }
+
+        const action = isAdmin ? 'admin_granted' : 'admin_revoked';
+        await logAudit(req.user.userId, req.user.username, action, null, req, true,
+            `${action} for: ${result.rows[0].username}`);
+
+        res.json({
+            success: true,
+            message: isAdmin
+                ? `${result.rows[0].username} is now a portal admin.`
+                : `Portal admin rights removed from ${result.rows[0].username}.`,
+        });
+    } catch (err) {
+        console.error('[Admin] Set portal admin error:', err.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update admin rights.',
+        });
+    }
+}
+
+/**
+ * POST /api/admin/admins
+ * Grant portal admin rights by AD username (the user does not need to have signed in yet).
+ * Body: { username }
+ */
+async function addPortalAdmin(req, res) {
+    try {
+        const username = typeof req.body.username === 'string' ? req.body.username.trim() : '';
+        if (!username || username.length > 100) {
+            return res.status(400).json({
+                success: false,
+                message: 'Enter a username.',
+            });
+        }
+
+        let adUser;
+        try {
+            adUser = await ldapService.findUser(username);
+        } catch (err) {
+            console.error('[Admin] Add admin lookup error:', err.message);
+            return res.status(503).json({
+                success: false,
+                message: 'The directory service is currently unavailable. Please try again later.',
+            });
+        }
+
+        if (!adUser) {
+            return res.status(404).json({
+                success: false,
+                message: 'No user with this username was found in Active Directory.',
+            });
+        }
+        if (parseInt(adUser.userAccountControl, 10) & UAC_ACCOUNT_DISABLED) {
+            return res.status(400).json({
+                success: false,
+                message: 'This account is disabled in Active Directory.',
+            });
+        }
+
+        const dbUser = await getOrCreateUser(adUser);
+        if (dbUser.is_portal_admin) {
+            return res.status(409).json({
+                success: false,
+                message: `${dbUser.username} is already a portal admin.`,
+            });
+        }
+
+        await db.query('UPDATE users SET is_portal_admin = TRUE, updated_at = NOW() WHERE id = $1', [dbUser.id]);
+
+        await logAudit(req.user.userId, req.user.username, 'admin_granted', null, req, true,
+            `admin_granted for: ${dbUser.username}`);
+
+        res.status(201).json({
+            success: true,
+            message: `${dbUser.username} is now a portal admin.`,
+        });
+    } catch (err) {
+        console.error('[Admin] Add portal admin error:', err.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to add admin.',
         });
     }
 }
@@ -559,6 +685,8 @@ module.exports = {
     getStats,
     getAuditLog,
     toggleLock,
+    setPortalAdmin,
+    addPortalAdmin,
     getQuestions,
     addQuestion,
     updateQuestion,

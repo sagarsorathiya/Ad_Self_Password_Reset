@@ -99,7 +99,8 @@
         usersBody.innerHTML = users.map((u) => `
             <tr>
                 <td>
-                    <div><strong>${escapeHtml(u.display_name || u.username)}</strong></div>
+                    <div><strong>${escapeHtml(u.display_name || u.username)}</strong>${u.is_portal_admin
+                        ? ' <span class="badge badge-success">Admin</span>' : ''}</div>
                     <div class="text-muted text-sm">${escapeHtml(u.username)}</div>
                 </td>
                 <td>${escapeHtml(u.email || '—')}</td>
@@ -118,6 +119,9 @@
                                 data-locked="${u.locked}" data-name="${escapeHtml(u.username)}">${u.locked ? 'Unlock' : 'Lock'}</button>
                         <button class="btn btn-ghost btn-sm" data-action="reset" data-id="${Number(u.id)}"
                                 data-name="${escapeHtml(u.username)}">Reset Enrollment</button>
+                        ${Number(u.id) === Number(user.id) ? '' : `
+                        <button class="btn btn-ghost btn-sm" data-action="admin" data-id="${Number(u.id)}"
+                                data-admin="${u.is_portal_admin}" data-name="${escapeHtml(u.username)}">${u.is_portal_admin ? 'Remove Admin' : 'Make Admin'}</button>`}
                     </div>
                 </td>
             </tr>`).join('');
@@ -150,7 +154,56 @@
             });
             if (!ok) return;
             await runAction(btn, () => api('PUT', `/api/admin/users/${id}/reset-enrollment`, {}));
+        } else if (btn.dataset.action === 'admin') {
+            const grant = btn.dataset.admin !== 'true';
+            const ok = await confirmDialog({
+                title: grant ? 'Make portal admin?' : 'Remove portal admin?',
+                message: grant
+                    ? `${name} will get full access to this Administration page (users, audit log, questions, password exceptions, admins).`
+                    : `${name} will lose access to the Administration page. Members of the AD admin group stay admins.`,
+                confirmText: grant ? 'Make Admin' : 'Remove Admin',
+                danger: !grant,
+            });
+            if (!ok) return;
+            await runAction(btn, () => api('PUT', `/api/admin/users/${id}/admin`, { isAdmin: grant }));
         }
+    });
+
+    document.getElementById('addAdminBtn').addEventListener('click', () => {
+        const body = document.createElement('form');
+        body.noValidate = true;
+        body.innerHTML = `
+            <p class="text-sm text-muted mb-4">Enter the Active Directory username (sAMAccountName). The user does not need to have signed in to the portal before.</p>
+            <div class="form-group">
+                <label class="form-label" for="adminUsername">Username</label>
+                <input class="form-input" type="text" id="adminUsername" maxlength="100" autocomplete="off">
+                <div class="form-error"></div>
+            </div>`;
+        const input = body.querySelector('#adminUsername');
+
+        openModal({
+            title: 'Add Portal Admin',
+            content: body,
+            confirmText: 'Add Admin',
+            onConfirm: async () => {
+                setFieldError(input, '');
+                const username = input.value.trim();
+                if (!username) {
+                    setFieldError(input, 'Enter a username.');
+                    return false;
+                }
+                try {
+                    const res = await api('POST', '/api/admin/admins', { username });
+                    showToast(res.message || 'Admin added.', 'success');
+                    await Promise.all([loadUsers(), loadStats()]);
+                    return true;
+                } catch (err) {
+                    setFieldError(input, err.message);
+                    return false;
+                }
+            },
+        });
+        input.focus();
     });
 
     async function runAction(btn, fn) {

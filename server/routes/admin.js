@@ -11,6 +11,8 @@ router.use(authenticate, requireAdmin);
 router.get('/users', adminController.getUsers);
 router.put('/users/:id/lock', adminController.toggleLock);
 router.put('/users/:id/reset-enrollment', adminController.resetEnrollment);
+router.put('/users/:id/admin', adminController.setPortalAdmin);
+router.post('/admins', adminController.addPortalAdmin);
 
 // Statistics
 router.get('/stats', adminController.getStats);

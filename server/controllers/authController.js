@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/default');
 const ldapService = require('../services/ldapService');
 const db = require('../config/db');
+const { isAdGroupAdmin } = require('../middleware/admin');
 
 /**
  * POST /api/auth/login
@@ -41,8 +42,9 @@ async function login(req, res) {
             );
         }
 
-        // Check admin status
-        const isAdmin = ldapService.isAdmin(adUser);
+        // Admin = member of AD_ADMIN_GROUP or granted in the portal
+        const adGroupAdmin = ldapService.isAdmin(adUser);
+        const isAdmin = adGroupAdmin || dbUser.is_portal_admin;
 
         // Generate JWT
         const token = jwt.sign(
@@ -54,6 +56,7 @@ async function login(req, res) {
                 email: adUser.mail || '',
                 dn: adUser.dn,
                 isAdmin,
+                adGroupAdmin,
                 isEnrolled: dbUser.is_enrolled,
             },
             config.jwt.secret,
@@ -180,15 +183,16 @@ async function refresh(req, res) {
             });
         }
         let adUser;
-        let isAdmin = false;
+        let adGroupAdmin = false;
         try {
             adUser = await ldapService.findUser(dbUser.username);
             if (adUser) {
-                isAdmin = ldapService.isAdmin(adUser);
+                adGroupAdmin = ldapService.isAdmin(adUser);
             }
         } catch {
             // If AD is unreachable, still issue token with cached info
         }
+        const isAdmin = adGroupAdmin || dbUser.is_portal_admin;
 
         const token = jwt.sign(
             {
@@ -199,6 +203,7 @@ async function refresh(req, res) {
                 email: adUser?.mail || dbUser.email || '',
                 dn: adUser?.dn || '',
                 isAdmin,
+                adGroupAdmin,
                 isEnrolled: dbUser.is_enrolled,
             },
             config.jwt.secret,
@@ -248,7 +253,7 @@ async function me(req, res) {
                 username: dbUser.username,
                 displayName: dbUser.display_name || req.user.displayName,
                 email: dbUser.email || req.user.email,
-                isAdmin: req.user.isAdmin,
+                isAdmin: isAdGroupAdmin(req.user) || (dbUser.is_portal_admin && !dbUser.locked),
                 isEnrolled: dbUser.is_enrolled,
                 totpEnabled: dbUser.totp_enabled,
                 securityQuestionsSet: dbUser.security_questions_set,
@@ -330,4 +335,4 @@ async function logAudit(userId, username, action, method, req, success, details 
     }
 }
 
-module.exports = { login, refresh, me, logout, logAudit };
+module.exports = { login, refresh, me, logout, logAudit, getOrCreateUser };

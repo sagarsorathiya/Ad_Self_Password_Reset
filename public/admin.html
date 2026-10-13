@@ -41,8 +41,10 @@
                             <button class="filter-tab" data-filter="enrolled">Enrolled</button>
                             <button class="filter-tab" data-filter="pending">Pending</button>
                             <button class="filter-tab" data-filter="locked">Locked</button>
+                            <button class="filter-tab" data-filter="admins">Portal Admins</button>
                         </div>
                     </div>
+                    <button type="button" class="btn btn-primary btn-sm" id="addAdminBtn">+ Add Admin</button>
                 </div>
                 <div class="table-container">
                     <table class="data-table">
@@ -84,6 +86,8 @@
                             <option value="totp_replaced">Authenticator replaced</option>
                             <option value="user_locked">User locked</option>
                             <option value="user_unlocked">User unlocked</option>
+                            <option value="admin_granted">Admin granted</option>
+                            <option value="admin_revoked">Admin removed</option>
                             <option value="question_added">Question added</option>
                             <option value="question_updated">Question updated</option>
                             <option value="password_exception_added">Password exception added</option>

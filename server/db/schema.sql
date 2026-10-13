@@ -73,6 +73,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAUL
 -- New authenticator awaiting verification (AES-256-GCM encrypted); the active one keeps working meanwhile
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_secret TEXT;
 
+-- Portal admin granted from the admin panel (in addition to members of AD_ADMIN_GROUP)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_portal_admin BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- Admin-managed words/phrases that new passwords may not contain (or equal)
 CREATE TABLE IF NOT EXISTS password_exceptions (
     id SERIAL PRIMARY KEY,

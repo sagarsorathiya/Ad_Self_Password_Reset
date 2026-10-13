@@ -189,4 +189,50 @@ describe('admin', () => {
         assert.equal(logs.length, 1);
         assert.equal(logs[0].username, 'jsmith');
     });
+
+    test('portal admin: grant by username takes effect immediately, revoke removes access', async () => {
+        const { token: adminToken } = await login(api, 'admin', 'Adm1nPass!');
+        const { token: userToken } = await login(api, 'jsmith', 'Passw0rd!');
+        assert.equal((await api('GET', '/api/admin/stats', undefined, userToken)).status, 403);
+
+        assert.equal((await api('POST', '/api/admin/admins', { username: 'jsmith' }, userToken)).status, 403);
+        assert.equal((await api('POST', '/api/admin/admins', { username: 'jsmith' }, adminToken)).status, 201);
+        assert.equal((await api('POST', '/api/admin/admins', { username: 'jsmith' }, adminToken)).status, 409);
+
+        // Existing session works without signing in again
+        assert.equal((await api('GET', '/api/admin/stats', undefined, userToken)).status, 200);
+        assert.equal((await api('GET', '/api/auth/me', undefined, userToken)).body.data.isAdmin, true);
+        assert.equal((await login(api, 'jsmith', 'Passw0rd!')).user.isAdmin, true);
+
+        const admins = (await api('GET', '/api/admin/users?filter=admins', undefined, adminToken)).body.data.users;
+        assert.deepEqual(admins.map((u) => u.username), ['jsmith']);
+
+        // A portal admin can manage other admins but cannot remove their own rights
+        const mjonesData = await login(api, 'mjones', 'Welcome1!');
+        assert.equal((await api('PUT', `/api/admin/users/${mjonesData.user.id}/admin`, { isAdmin: true }, userToken)).status, 200);
+        assert.equal((await api('PUT', `/api/admin/users/${admins[0].id}/admin`, { isAdmin: false }, userToken)).status, 400);
+
+        assert.equal((await api('PUT', `/api/admin/users/${admins[0].id}/admin`, { isAdmin: false }, mjonesData.token)).status, 200);
+        assert.equal((await api('GET', '/api/admin/stats', undefined, userToken)).status, 403);
+        assert.equal((await api('GET', '/api/auth/me', undefined, userToken)).body.data.isAdmin, false);
+
+        const audit = (await api('GET', '/api/admin/audit-log?action=admin_revoked', undefined, adminToken)).body.data.logs;
+        assert.equal(audit.length, 1);
+        assert.equal(audit[0].username, 'mjones');
+    });
+
+    test('portal admin: unknown or disabled AD accounts are refused, locked admins lose access', async () => {
+        const { token } = await login(api, 'admin', 'Adm1nPass!');
+        assert.equal((await api('POST', '/api/admin/admins', { username: 'ghost' }, token)).status, 404);
+        assert.equal((await api('POST', '/api/admin/admins', { username: 'disabled.user' }, token)).status, 400);
+        assert.equal((await api('POST', '/api/admin/admins', { username: '' }, token)).status, 400);
+        assert.equal((await api('PUT', '/api/admin/users/1/admin', { isAdmin: 'yes' }, token)).status, 400);
+
+        const { token: userToken, user } = await login(api, 'jsmith', 'Passw0rd!');
+        assert.equal((await api('PUT', `/api/admin/users/${user.id}/admin`, { isAdmin: true }, token)).status, 200);
+        assert.equal((await api('GET', '/api/admin/stats', undefined, userToken)).status, 200);
+
+        assert.equal((await api('PUT', `/api/admin/users/${user.id}/lock`, { locked: true }, token)).status, 200);
+        assert.equal((await api('GET', '/api/admin/stats', undefined, userToken)).status, 403);
+    });
 });

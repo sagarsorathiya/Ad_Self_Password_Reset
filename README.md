@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 96 automated tests (`node:test`)
+- Tests: 98 automated tests (`node:test`)
 
 ---
 
@@ -37,7 +37,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 | Change password | For signed-in users. The current password is checked against AD. |
 | Second domain (optional) | Every change and reset also sets the same password in a second domain (same username), e.g. a separate mail domain. See §5.1. |
 | Mail (optional) | Security alert after every password change or reset (time, IP address, browser, method). Daily reminders before the password expires. See §5.2. |
-| Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, audit log viewer, security question management, password exception list (blocked words). |
+| Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, portal admins, audit log viewer, security question management, password exception list (blocked words). |
 | Security | Rate limiting, account lockout, TOTP replay protection, refresh-token revocation, audit log, CSP/Helmet. |
 
 ## 2. Architecture
@@ -51,7 +51,7 @@ Browser ──HTTPS──► Express (Node.js) ──LDAPS 636──► Active D
 ```
 
 - **Passwords are never stored.** Every password operation goes straight to AD.
-- **Admin rights** come from membership in the AD group set in `AD_ADMIN_GROUP`.
+- **Admin rights** come from membership in the AD group set in `AD_ADMIN_GROUP`, or are granted to individual users in the admin panel (stored in the portal database).
 - **Mail is optional.** Without `SMTP_HOST` the portal sends nothing.
 - Layout: `server/` (config, controllers, middleware, routes, services, db/schema.sql), `public/` (pages and scripts), `scripts/` (database setup, mail test, reminder dry run, Windows helpers), `test/`.
 
@@ -356,7 +356,7 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 1. **First sign-in:** open the portal and sign in with your domain username (just the username, not your email address or `DOMAINSername`) and password. You're taken straight to enrollment.
 2. **Enroll:**
    - Step 1: pick 3 different questions and type answers (not case-sensitive).
-   - Step 2: scan the QR code with Microsoft Authenticator, Google Authenticator or a similar app, then type the 6-digit code.
+   - Step 2: scan the QR code with Google Authenticator, Microsoft Authenticator or a compatible app (if none is installed, download one from the Google Play Store or the App Store), then type the 6-digit code.
 3. **Forgot your password:** on the sign-in page click *Reset it here* and enter your username. With the default policy (`RESET_POLICY=both`), answer your security questions, **then** enter the 6-digit code from your authenticator app. Then choose a new password within 10 minutes. If you've lost your phone, contact the help desk; they can reset your enrollment.
 4. **Change password:** after signing in, go to *Change Password*. You're signed out afterwards and sign in again with the new password.
 5. **Security Settings** (shown in the navigation bar once you've enrolled):
@@ -367,9 +367,10 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 
 ## 9. Admin guide
 
-Members of `AD_ADMIN_GROUP` see **Admin** in the navigation bar.
+Members of `AD_ADMIN_GROUP` and portal admins see **Admin** in the navigation bar.
 - **Stats:** total, enrolled, pending and locked users (users appear once they've signed in for the first time).
 - **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers and authenticator, which you'd use for a lost phone. They must enroll again at their next sign-in.
+- **Portal admins:** **+ Add Admin** grants admin rights by AD username (the account must exist and be enabled; it doesn't need to have signed in yet). **Make Admin** / **Remove Admin** on a user row does the same for existing users, and the *Portal Admins* filter lists them. Changes apply immediately, without signing in again, and are audited (*Admin granted*, *Admin removed*). You can't remove your own rights, and locking a portal admin also blocks their admin access. Members of `AD_ADMIN_GROUP` are always admins and can't be removed here.
 - **Audit Log:** filter by exact username, action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), including failures.
 - **Security Questions:** add, edit, reorder, deactivate. Deactivating a question hides it from new enrollments; existing users keep it.
 - **Password Exceptions:** words or phrases that new passwords (change and reset) may not use. *Contains* blocks any password that includes the entry; *Exact* blocks only that exact password. Matching ignores case and common look-alikes (`@`→a, `0`→o, `1`→i/l, `3`→e, `$`/`5`→s, `7`→t, `4`→a), so `company` also blocks `C0mp@ny2026`. Entries can be edited, deactivated or removed and apply immediately, in addition to the domain password policy.
@@ -391,6 +392,7 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 | Secrets in config files | `.env` secrets DPAPI-encrypted (`protect-secret.ps1`); PFX private key protected by a random DPAPI-encrypted passphrase and git-ignored |
 | Over-privileged service account | Least-privilege account script; startup detects `adminCount=1` accounts (warning in development, refusal in production) |
 | Stolen session | 15-min access tokens; refresh tokens revoked on logout and on admin lock (`token_version`) |
+| Stale admin rights | Portal-granted admin rights are re-checked in the database on every admin request, so removing them or locking the user applies immediately; every grant and removal is audited |
 | Token misuse | Access, refresh and reset tokens are typed; only `access` tokens open a session; algorithm pinned to HS256 |
 | Factor takeover via a stolen session | Changing existing security answers or replacing the authenticator requires the current AD password (rate-limited) |
 | Clear-text passwords on the network | The AD connection must be encrypted (startup refuses plain `ldap://`); production refuses to start without HTTPS or `TRUST_PROXY`; optional `PG_SSL` |
@@ -425,9 +427,11 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | POST | `/api/password/reset/verify-questions` | – | `{ username, answers }` → `resetToken` (`either`) or `stepToken` + `nextStep: 'totp'` (`both`) |
 | POST | `/api/password/reset/verify-totp` | – | `{ username, code, stepToken? }` → `resetToken` (`stepToken` required under `both`) |
 | POST | `/api/password/reset/set-password` | – | `{ resetToken, newPassword, confirmPassword }` |
-| GET | `/api/admin/users` | admin | `?page&limit&search&filter=all\|enrolled\|pending\|locked` |
+| GET | `/api/admin/users` | admin | `?page&limit&search&filter=all\|enrolled\|pending\|locked\|admins` |
 | PUT | `/api/admin/users/:id/lock` | admin | `{ locked: boolean }` |
 | PUT | `/api/admin/users/:id/reset-enrollment` | admin | – |
+| PUT | `/api/admin/users/:id/admin` | admin | `{ isAdmin: boolean }` (your own rights can't be removed) |
+| POST | `/api/admin/admins` | admin | `{ username }` (enabled AD account) |
 | GET | `/api/admin/stats` | admin | – |
 | GET | `/api/admin/audit-log` | admin | `?page&limit&username&action&startDate&endDate` |
 | GET/POST | `/api/admin/questions` | admin | POST `{ questionText, sortOrder? }` |
@@ -440,7 +444,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (96 tests)
+npm test                   # everything (98 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
@@ -467,7 +471,7 @@ The integration tests start the app on a random port with the mock AD and reset 
 | `Failed to change password: ... 00002077` / unwilling to perform | Password writes need LDAPS. Check `AD_URL` starts with `ldaps://`. |
 | Password change fails with an access error | The service account lacks the *Reset password* delegation on that OU, or the user is protected by AdminSDHolder. |
 | "does not meet the domain password policy" | AD rejected the password (length, complexity, history, or minimum password age). |
-| Admin menu missing | The user isn't a **direct** member of `AD_ADMIN_GROUP`, or the DN is wrong. Sign out and in again after fixing it. |
+| Admin menu missing | The user isn't a **direct** member of `AD_ADMIN_GROUP` (or the DN is wrong) and isn't a portal admin. Sign out and in again after fixing the group; portal-admin changes apply immediately. |
 | Everyone gets rate-limited | Clients share one IP (proxy or NAT). Set `TRUST_PROXY` correctly and/or raise `RATE_LIMIT_GENERAL_MAX`. |
 | Authenticator codes always invalid | The server clock is wrong. Keep the server synced to the domain time source (`w32tm /resync`). |
 | Server exits: `JWT_SECRET must be set...` | Production startup check: set strong secrets in `.env`. |
