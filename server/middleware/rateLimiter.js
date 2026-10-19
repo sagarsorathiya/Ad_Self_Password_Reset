@@ -66,7 +66,25 @@ const verifyLimiter = rateLimit({
     },
 });
 
+/**
+ * Enrollment steps that only hand out data to the signed-in user (questions save,
+ * QR/secret generation). Separate bucket so retries and page reloads cannot use up
+ * the strict verification budget; nothing here can be guessed.
+ */
+const enrollLimiter = rateLimit({
+    windowMs: config.rateLimit.windowMs,
+    max: Math.max(config.rateLimit.max * 4, 20),
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => keyFor(req, 'enroll'),
+    message: {
+        success: false,
+        message: 'Too many setup attempts. Please try again in 15 minutes.',
+    },
+});
+
 module.exports = {
+    enrollLimiter,
     generalLimiter,
     loginLimiter,
     resetLimiter,

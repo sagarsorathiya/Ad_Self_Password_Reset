@@ -311,6 +311,10 @@
         document.getElementById('totpCode').value = '';
         clearFieldErrors(document.getElementById('totpForm'));
 
+        const setupError = document.getElementById('totpSetupError');
+        setupError.classList.add('hidden');
+        document.getElementById('totpRetryBtn').onclick = () => startTotpSetup(isReplacement, currentPassword);
+
         showOverlay();
         try {
             const { data } = await api('POST', '/api/enrollment/totp/setup', currentPassword ? { currentPassword } : {});
@@ -322,6 +326,10 @@
             if (err.code === 'REAUTH_FAILED' || err.code === 'REAUTH_REQUIRED') {
                 setFieldError(document.getElementById('totpCurrentPassword'), err.message);
             } else {
+                // Stay visible: a toast alone leaves a blank QR code with no explanation
+                document.getElementById('totpSetupErrorText').textContent =
+                    `Could not load the QR code. ${err.message}`;
+                setupError.classList.remove('hidden');
                 showToast(err.message, 'error');
             }
             return false;

@@ -92,6 +92,10 @@
                             <li>Scan the QR code below, or enter the key manually.</li>
                             <li>Enter the 6-digit code shown in the app to confirm.</li>
                         </ol>
+                        <div id="totpSetupError" class="alert alert-error hidden mb-4">
+                            <span id="totpSetupErrorText"></span>
+                            <button type="button" class="btn btn-ghost" id="totpRetryBtn">Try again</button>
+                        </div>
                         <div class="qr-container mb-4">
                             <img id="qrImage" alt="Authenticator QR code">
                         </div>

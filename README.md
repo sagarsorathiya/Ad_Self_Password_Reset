@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 98 automated tests (`node:test`)
+- Tests: 99 automated tests (`node:test`)
 
 ---
 
@@ -34,7 +34,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 | Sign-in | AD credentials checked by an LDAP bind. JWT access token (15 min) plus refresh token (7 days). |
 | Enrollment | 3 security questions (answers hashed with bcrypt) and an authenticator app (QR code or manual key). |
 | Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes. |
-| Change password | For signed-in users. The current password is checked against AD. |
+| Change password | For signed-in users who have completed enrollment. The current password is checked against AD. |
 | Second domain (optional) | Every change and reset also sets the same password in a second domain (same username), e.g. a separate mail domain. See §5.1. |
 | Mail (optional) | Security alert after every password change or reset (time, IP address, browser, method). Daily reminders before the password expires. See §5.2. |
 | Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, portal admins, audit log viewer, security question management, password exception list (blocked words). |
@@ -353,12 +353,12 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 
 ## 8. User guide
 
-1. **First sign-in:** open the portal and sign in with your domain username (just the username, not your email address or `DOMAINSername`) and password. You're taken straight to enrollment.
+1. **First sign-in:** open the portal and sign in with your domain username (just the username, not your email address or `DOMAIN\username`) and password. You're taken straight to enrollment.
 2. **Enroll:**
    - Step 1: pick 3 different questions and type answers (not case-sensitive).
    - Step 2: scan the QR code with Google Authenticator, Microsoft Authenticator or a compatible app (if none is installed, download one from the Google Play Store or the App Store), then type the 6-digit code.
 3. **Forgot your password:** on the sign-in page click *Reset it here* and enter your username. With the default policy (`RESET_POLICY=both`), answer your security questions, **then** enter the 6-digit code from your authenticator app. Then choose a new password within 10 minutes. If you've lost your phone, contact the help desk; they can reset your enrollment.
-4. **Change password:** after signing in, go to *Change Password*. You're signed out afterwards and sign in again with the new password.
+4. **Change password:** after signing in, go to *Change Password*. It appears only once you've finished enrollment (security questions and authenticator app). You're signed out afterwards and sign in again with the new password.
 5. **Security Settings** (shown in the navigation bar once you've enrolled):
    - **Update questions or answers:** your current questions are pre-selected. Answers are stored as one-way hashes and can't be shown to anyone, so leave an answer blank to keep it, or type a new one.
    - **Replace authenticator (new device):** scan the new QR code and enter a code from the new device. Your old device keeps working until the new one is verified, then stops working.
@@ -383,7 +383,7 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 |---|---|
 | Password theft from the database | Passwords are never stored; all operations go to AD over LDAPS |
 | Database leak | Answers hashed with bcrypt (cost 12) and normalized (trim + lowercase); TOTP secrets encrypted with AES-256-GCM |
-| Brute force | Per IP+username rate limit (5 per 15 min); account lockout after 5 failed verifications (30 min); generic error messages |
+| Brute force | Per IP+username rate limit (5 per 15 min; authenticator QR generation has a separate, looser limit); account lockout after 5 failed verifications (30 min); generic error messages |
 | User enumeration | Unknown and not-enrolled users get the same response; login errors don't reveal whether the user exists |
 | Reset token replay | Single-use JWT (10 min) claimed atomically in `used_reset_tokens`; forged or wrong-type tokens rejected |
 | TOTP code replay | Last accepted time step stored per user; a code can't be reused, including the one entered at enrollment |
@@ -421,7 +421,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | POST | `/api/enrollment/totp/setup` | user | `{ currentPassword? }` (required when an authenticator is already active) → `{ qrCode, secret }` (staged as pending; the current device stays active) |
 | POST | `/api/enrollment/totp/verify` | user | `{ code }` from the new device; activates it and retires the old one |
 | GET | `/api/enrollment/status` | user | – |
-| POST | `/api/password/change` | user | `{ currentPassword, newPassword, confirmPassword }` |
+| POST | `/api/password/change` | user | `{ currentPassword, newPassword, confirmPassword }`. Enrolled users only; otherwise 403 with `code: 'ENROLLMENT_REQUIRED'`. |
 | POST | `/api/password/reset/verify-user` | – | `{ username }` → `availableMethods` |
 | POST | `/api/password/reset/get-questions` | – | `{ username }` |
 | POST | `/api/password/reset/verify-questions` | – | `{ username, answers }` → `resetToken` (`either`) or `stepToken` + `nextStep: 'totp'` (`both`) |
@@ -444,7 +444,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (98 tests)
+npm test                   # everything (99 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
