@@ -55,7 +55,7 @@ async function waitForNotification(username) {
 }
 
 async function changePassword(username, password) {
-    const { token } = await login(api, username, password);
+    const { token } = await enrollUser(api, username, password);
     const res = await api('POST', '/api/password/change', {
         currentPassword: password, newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD,
     }, token);

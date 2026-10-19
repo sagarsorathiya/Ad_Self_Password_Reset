@@ -35,6 +35,17 @@ async function changePassword(req, res) {
     try {
         const { currentPassword, newPassword, confirmPassword } = req.body;
 
+        // Enrollment is mandatory before any password change (JWT isEnrolled can be stale)
+        const enrolled = await db.query('SELECT is_enrolled FROM users WHERE id = $1', [req.user.userId]);
+        if (!enrolled.rows[0]?.is_enrolled) {
+            await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, false, 'Not enrolled');
+            return res.status(403).json({
+                success: false,
+                message: 'Please set up your security questions and authenticator app before changing your password.',
+                code: 'ENROLLMENT_REQUIRED',
+            });
+        }
+
         if (!currentPassword || !newPassword || !confirmPassword) {
             return res.status(400).json({
                 success: false,

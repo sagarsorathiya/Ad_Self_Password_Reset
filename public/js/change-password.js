@@ -1,6 +1,6 @@
 (async function () {
     const user = await loadCurrentUser();
-    if (!user) return;
+    if (!user || redirectIfNotEnrolled(user)) return;
 
     renderNavbar(user, 'change-password');
     document.getElementById('content').classList.remove('hidden');

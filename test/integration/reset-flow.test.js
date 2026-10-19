@@ -378,8 +378,18 @@ describe('account lockout', () => {
 });
 
 describe('authenticated password change', () => {
-    test('requires correct current password and applies new one', async () => {
+    test('is refused until the user has completed enrollment', async () => {
         const { token } = await login(api, 'jsmith', 'Passw0rd!');
+        const res = await api('POST', '/api/password/change', {
+            currentPassword: 'Passw0rd!', newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD,
+        }, token);
+        assert.equal(res.status, 403);
+        assert.equal(res.body.code, 'ENROLLMENT_REQUIRED');
+        await login(api, 'jsmith', 'Passw0rd!'); // password unchanged in AD
+    });
+
+    test('requires correct current password and applies new one', async () => {
+        const { token } = await enrollUser(api, 'jsmith', 'Passw0rd!');
         const wrong = await api('POST', '/api/password/change', {
             currentPassword: 'nope', newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD,
         }, token);

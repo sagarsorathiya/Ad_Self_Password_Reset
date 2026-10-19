@@ -33,7 +33,7 @@ beforeEach(async () => {
 const NEW_PASSWORD = 'Brand-New-Pass1';
 
 async function changePassword(username, password, newPassword) {
-    const { token } = await login(api, username, password);
+    const { token } = await enrollUser(api, username, password);
     return api('POST', '/api/password/change', {
         currentPassword: password, newPassword, confirmPassword: newPassword,
     }, token);
@@ -195,7 +195,7 @@ describe('expiry reminders from the second domain (PASSWORD_REMINDER_SOURCE=seco
 
     test('a change in the portal resets the second-domain expiry', async () => {
         mailExpiresIn('jsmith', 2);
-        const { token } = await login(api, 'jsmith', 'Passw0rd!');
+        const { token } = await enrollUser(api, 'jsmith', 'Passw0rd!');
         await api('POST', '/api/password/change', {
             currentPassword: 'Passw0rd!', newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD,
         }, token);

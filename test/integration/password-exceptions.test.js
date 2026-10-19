@@ -68,7 +68,7 @@ describe('enforcement', () => {
 
     test('password change rejects blocked words; inactive entries are ignored', async () => {
         const { token: adminToken, id } = await addException('company');
-        const { token } = await login(api, 'jsmith', 'Passw0rd!');
+        const { token } = await enrollUser(api, 'jsmith', 'Passw0rd!');
         const body = { currentPassword: 'Passw0rd!', newPassword: 'MyC0mpany#99', confirmPassword: 'MyC0mpany#99' };
 
         const blocked = await api('POST', '/api/password/change', body, token);

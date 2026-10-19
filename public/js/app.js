@@ -325,7 +325,7 @@ function renderNavbar(user, activePage) {
 
     const links = [
         { href: '/dashboard.html', label: 'Home', key: 'dashboard' },
-        { href: '/change-password.html', label: 'Change Password', key: 'change-password' },
+        ...(user.isEnrolled ? [{ href: '/change-password.html', label: 'Change Password', key: 'change-password' }] : []),
         { href: '/enroll.html', label: user.isEnrolled ? 'Security Settings' : 'Complete Enrollment', key: 'enroll' },
     ];
     if (user.isAdmin) links.push({ href: '/admin.html', label: 'Administration', key: 'admin' });
