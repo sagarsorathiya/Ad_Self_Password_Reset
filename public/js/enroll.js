@@ -1,5 +1,7 @@
 (async function () {
     const QUESTION_COUNT = 3;
+    // Declared before the first goToStep(2) call: touching a later `let` there throws silently
+    let replacing = false;
 
     const user = await loadCurrentUser();
     if (!user) return;
@@ -261,8 +263,6 @@
 
     // ---- Authenticator ----
 
-    let replacing = false;
-
     function initTotp() {
         const form = document.getElementById('totpForm');
         const codeInput = document.getElementById('totpCode');
@@ -305,18 +305,19 @@
     }
 
     async function startTotpSetup(isReplacement, currentPassword) {
-        replacing = isReplacement;
-        document.getElementById('totpReplaceAlert').classList.toggle('hidden', !replacing);
-        document.getElementById('totpVerifyBtn').textContent = replacing ? 'Verify New Device' : 'Verify & Enable';
-        document.getElementById('totpCode').value = '';
-        clearFieldErrors(document.getElementById('totpForm'));
-
         const setupError = document.getElementById('totpSetupError');
-        setupError.classList.add('hidden');
         document.getElementById('totpRetryBtn').onclick = () => startTotpSetup(isReplacement, currentPassword);
 
         showOverlay();
         try {
+            // Inside the try so any failure shows the error box instead of a silent blank QR code
+            replacing = isReplacement;
+            document.getElementById('totpReplaceAlert').classList.toggle('hidden', !replacing);
+            document.getElementById('totpVerifyBtn').textContent = replacing ? 'Verify New Device' : 'Verify & Enable';
+            document.getElementById('totpCode').value = '';
+            clearFieldErrors(document.getElementById('totpForm'));
+            setupError.classList.add('hidden');
+
             const { data } = await api('POST', '/api/enrollment/totp/setup', currentPassword ? { currentPassword } : {});
             document.getElementById('qrImage').src = data.qrCode;
             document.getElementById('manualKey').textContent = data.secret.replace(/(.{4})/g, '$1 ').trim();

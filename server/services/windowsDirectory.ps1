@@ -57,10 +57,11 @@ try {
             Write-Result @{ ok = $true }
         }
         'listPasswordExpiries' {
-            # Enabled, password can expire, has a mail address; AD computes the expiry (domain policy and PSOs)
+            # Enabled, password can expire; AD computes the expiry (domain policy and PSOs).
+            # No mail filter: the reminder goes to the first-domain address, so a missing second-domain mail must not hide the user.
             $base = $req.searchBase
             if (-not $base) { $base = [string](Open-Entry 'RootDSE').psbase.Properties['defaultNamingContext'].Value }
-            $filter = '(&(objectCategory=person)(objectClass=user)(mail=*)' +
+            $filter = '(&(objectCategory=person)(objectClass=user)' +
                 '(!(userAccountControl:1.2.840.113556.1.4.803:=2))(!(userAccountControl:1.2.840.113556.1.4.803:=65536)))'
             $properties = @('distinguishedName', 'sAMAccountName', 'displayName', 'mail', 'userAccountControl', 'adminCount',
                 'msDS-UserPasswordExpiryTimeComputed')
