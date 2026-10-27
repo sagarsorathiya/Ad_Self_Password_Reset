@@ -7,6 +7,7 @@ const config = require('./config/default');
 const db = require('./config/db');
 const ldapService = require('./services/ldapService');
 const passwordReminderService = require('./services/passwordReminderService');
+const settingsService = require('./services/settingsService');
 
 const PORT = config.server.port;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
@@ -63,6 +64,11 @@ async function cleanupExpiredTokens() {
 const server = createServer();
 const scheme = config.server.https ? 'https' : 'http';
 
+// Stored admin settings (mail, reminders) before anything reads them; .env stays the fallback
+settingsService.refresh().catch((err) => console.error(`[Settings] Initial load failed: ${err.message}`))
+    .finally(() => startListening());
+
+function startListening() {
 server.listen(PORT, config.server.host, () => {
     console.log('');
     console.log('AD Self-Service Password Reset Portal');
@@ -76,9 +82,13 @@ server.listen(PORT, config.server.host, () => {
         console.log(`  Sync to:     ${config.ad.secondary.name} (${config.ad.mock ? 'MOCK' : target})`);
     }
     console.log(`  Trust proxy: ${config.server.trustProxy}`);
-    console.log(`  Mail:        ${config.mail.host ? `${config.mail.host}:${config.mail.port}` : 'off (SMTP_HOST not set)'}`);
-    if (config.reminders.enabled) {
-        console.log(`  Reminders:   ${config.reminders.days.join(', ')} days before expiry, daily from ${config.reminders.hour}:00`);
+    // Effective values: .env with the admin panel's stored settings (app_settings) on top
+    const { mail, reminders } = settingsService.current();
+    console.log(`  Mail:        ${mail.host ? `${mail.host}:${mail.port}` : 'off (no SMTP host configured)'}`);
+    if (reminders.enabled) {
+        console.log(`  Reminders:   ${reminders.days.join(', ')} days before expiry, daily from ${reminders.hour}:00`);
+    } else {
+        console.log('  Reminders:   off');
     }
     console.log('');
     if (config.ad.mock) {
@@ -89,6 +99,7 @@ server.listen(PORT, config.server.host, () => {
     }
     checkServiceAccounts();
 });
+}
 
 // Optional plain-HTTP listener that only redirects to HTTPS (no content is served over HTTP)
 let redirectServer = null;

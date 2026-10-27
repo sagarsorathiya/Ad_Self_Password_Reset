@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS password_reminders (
     PRIMARY KEY (username, expires_at, days_before)
 );
 
+-- Admin-editable runtime settings (Administration -> Mail & Reminders). A missing key keeps the .env value;
+-- secret values (SMTP password) are AES-256-GCM encrypted, like TOTP secrets.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key VARCHAR(64) PRIMARY KEY,
+    value TEXT,
+    updated_by VARCHAR(100),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_audit_log_username ON audit_log(username);

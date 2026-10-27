@@ -5,6 +5,7 @@
 // what was sent, so restarts and repeated runs never send duplicates, and a new password starts a new cycle.
 const config = require('../config/default');
 const db = require('../config/db');
+const settingsService = require('./settingsService');
 const ldapService = require('./ldapService');
 const mailService = require('./mailService');
 const notificationService = require('./notificationService');
@@ -17,7 +18,7 @@ const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const NO_REQUEST = { headers: {} };
 
 // Most urgent stage reached: 10 days left with stages 14,7,6,5,4,3,2,1 → 14; 5 days left → 5
-function currentStage(daysLeft, days = config.reminders.days) {
+function currentStage(daysLeft, days = settingsService.current().reminders.days) {
     const reached = days.filter((d) => daysLeft <= d);
     return reached.length ? Math.min(...reached) : null;
 }
@@ -46,7 +47,9 @@ function countSkip(result, reason) {
  * @returns {Promise<{checked: number, due: Array, sent: number, failed: number}>}
  */
 async function runOnce({ now = new Date(), dryRun = false } = {}) {
-    const fromSecondary = config.reminders.source === 'secondary';
+    // Picks up an admin change (stages, source) made since the last run
+    const { days, source: expirySource } = (await settingsService.refresh()).reminders;
+    const fromSecondary = expirySource === 'secondary';
     const source = fromSecondary ? ldapService.secondary : ldapService;
     const entries = await source.listPasswordExpiries();
     // expiring: within the reminder window and not yet reminded; skipped: reason → count (second-domain source)
@@ -56,7 +59,7 @@ async function runOnce({ now = new Date(), dryRun = false } = {}) {
         if (!entry.expiresAt) continue;
         const daysLeft = Math.ceil((entry.expiresAt - now) / DAY_MS);
         if (daysLeft <= 0) continue;
-        const stage = currentStage(daysLeft);
+        const stage = currentStage(daysLeft, days);
         if (stage === null) continue;
 
         const already = await db.query(
@@ -115,17 +118,20 @@ async function runOnce({ now = new Date(), dryRun = false } = {}) {
 }
 
 /**
- * Checks hourly and runs once per day from PASSWORD_REMINDER_HOUR (local time).
- * @returns {NodeJS.Timeout|null} interval to clear on shutdown
+ * Checks hourly and runs once per day from the configured hour (local time). The timer always runs: whether
+ * reminders are on, from which hour, and with which stages is read from the settings on every tick, so an
+ * admin can switch them on in the panel without a restart.
+ * @returns {NodeJS.Timeout} interval to clear on shutdown
  */
 function start() {
-    if (!config.reminders.enabled || !mailService.isEnabled()) return null;
     let lastRunDay = null;
 
     const tick = async () => {
+        const { enabled, hour } = (await settingsService.refresh()).reminders;
+        if (!enabled || !mailService.isEnabled()) return;
         const now = new Date();
         const today = now.toDateString();
-        if (now.getHours() < config.reminders.hour || lastRunDay === today) return;
+        if (now.getHours() < hour || lastRunDay === today) return;
         lastRunDay = today;
         try {
             const { checked, sent, failed } = await runOnce({ now });

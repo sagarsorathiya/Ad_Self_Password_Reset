@@ -37,7 +37,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 | Change password | For signed-in users who have completed enrollment. The current password is checked against AD. |
 | Second domain (optional) | Every change and reset also sets the same password in a second domain (same username), e.g. a separate mail domain. See §5.1. |
 | Mail (optional) | Security alert after every password change or reset (time, IP address, browser, method). Daily reminders before the password expires. See §5.2. |
-| Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, portal admins, audit log viewer, security question management, password exception list (blocked words). |
+| Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, portal admins, audit log viewer, security question management, password exception list (blocked words), mail and expiry-reminder settings with test mail and manual run. |
 | Security | Rate limiting, account lockout, TOTP replay protection, refresh-token revocation, audit log, CSP/Helmet. |
 
 ## 2. Architecture
@@ -133,7 +133,7 @@ All settings live in `.env`, which is git-ignored.
 | `MAIL_FROM` | – | Sender, e.g. `IT Service Desk <it-noreply@corp.example>`. Required with `SMTP_HOST`. |
 | `PORTAL_NAME` / `PORTAL_URL` | `TOTP_ISSUER` / – | Name used in mails; portal address shown in alerts and reminders. |
 | `PASSWORD_REMINDERS` | `false` | `true` = daily expiry reminders (needs `SMTP_HOST`). |
-| `PASSWORD_REMINDER_DAYS` / `PASSWORD_REMINDER_HOUR` | `14,7,6,5,4,3,2,1` / `9` | Days before expiry that get a reminder; local hour of the daily run. |
+| `PASSWORD_REMINDER_DAYS` / `PASSWORD_REMINDER_HOUR` | `14,7,6,5,4,3,2,1` / `9` | Days before expiry that get a reminder; local hour of the daily run. Both are editable in the admin panel, which then overrides these. |
 | `PASSWORD_REMINDER_SOURCE` | `primary` | Domain whose password expiry is used. `secondary` when only the second domain expires passwords. |
 | `AD2_ALLOW_PRIVILEGED_BIND` | – | Override for `AD2_BIND_DN` only. Set `true` (with `AD_ALLOW_PRIVILEGED_BIND=false`) to keep the first-domain check active while the second domain uses a privileged account. |
 
@@ -211,7 +211,9 @@ node scripts/send-test-mail.js you@corp.example --all   # one sample of every ma
 
 **Security alert.** After every successful password change or reset, the user gets a plain-text mail with the time, IP address, browser, the method used (change, or reset with questions / authenticator) and which domains were updated, plus "if this wasn't you, contact IT" and the portal address (`PORTAL_URL`). The portal address is the only link in any mail. The address is the user's `mail` attribute in the first domain. Users without one are skipped. The mail is sent after the response, so a slow relay never delays the user, and a mail failure never undoes a password change. Each outcome is audited as `notification`.
 
-**Expiry reminders.** With `PASSWORD_REMINDERS=true`, the portal checks AD once a day from `PASSWORD_REMINDER_HOUR`. It mails every enabled user in `AD_USER_SEARCH_BASE` who has a `mail` address and a password that expires, once per stage (`PASSWORD_REMINDER_DAYS`, default 14 days before expiry and then every day over the last week: 7, 6, 5, 4, 3, 2 and 1 days). The expiry date is AD's own (`msDS-UserPasswordExpiryTimeComputed`), so the domain policy and fine-grained password policies apply. Users with *password never expires*, disabled accounts, and accounts that must change the password at next logon are skipped. Sent stages are recorded in `password_reminders`, so restarts never cause duplicates, and a new password starts a new cycle. A failed mail is retried at the next run. Each mail is audited as `password_reminder`.
+The settings below are the **defaults**; once an admin saves them in **Admin → Mail & Reminders**, the stored values win and `.env` is only the fallback for keys that were never saved there (see §9).
+
+**Expiry reminders.** With reminders switched on (`PASSWORD_REMINDERS=true`, or the toggle in the admin panel), the portal checks AD once a day from `PASSWORD_REMINDER_HOUR`. It mails every enabled user in `AD_USER_SEARCH_BASE` who has a `mail` address and a password that expires, once per stage (`PASSWORD_REMINDER_DAYS`, default 14 days before expiry and then every day over the last week: 7, 6, 5, 4, 3, 2 and 1 days). The expiry date is AD's own (`msDS-UserPasswordExpiryTimeComputed`), so the domain policy and fine-grained password policies apply. Users with *password never expires*, disabled accounts, and accounts that must change the password at next logon are skipped. Sent stages are recorded in `password_reminders`, so restarts never cause duplicates, and a new password starts a new cycle. A failed mail is retried at the next run. Each mail is audited as `password_reminder`.
 
 **When only the second domain expires passwords** (for example a mail domain with a maximum password age while the sign-in domain has none), set `PASSWORD_REMINDER_SOURCE=secondary`. The expiry is then read from the second domain, but reminders still go only to users with an **enabled account in the first domain**, at that account's `mail` address. Second-domain accounts without a first-domain account, and accounts the sync never writes (disabled, `adminCount=1`, the `AD2_BIND_DN` account), get no reminder, because changing the password in the portal wouldn't help them. Whenever a second domain is configured, reminders point users to the portal only (Ctrl+Alt+Del would change just one domain).
 
@@ -371,8 +373,9 @@ Members of `AD_ADMIN_GROUP` and portal admins see **Admin** in the navigation ba
 - **Stats:** total, enrolled, pending and locked users (users appear once they've signed in for the first time).
 - **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers and authenticator, which you'd use for a lost phone. They must enroll again at their next sign-in.
 - **Portal admins:** **+ Add Admin** grants admin rights by AD username (the account must exist and be enabled; it doesn't need to have signed in yet). **Make Admin** / **Remove Admin** on a user row does the same for existing users, and the *Portal Admins* filter lists them. Changes apply immediately, without signing in again, and are audited (*Admin granted*, *Admin removed*). You can't remove your own rights, and locking a portal admin also blocks their admin access. Members of `AD_ADMIN_GROUP` are always admins and can't be removed here.
-- **Audit Log:** filter by exact username, action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), including failures.
+- **Audit Log:** filter by username (partial match), action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), including failures.
 - **Security Questions:** add, edit, reorder, deactivate. Deactivating a question hides it from new enrollments; existing users keep it.
+- **Mail & Reminders:** the SMTP relay (host, port, encryption, optional login, From address) and the expiry reminders (on/off, the day stages, the daily run hour, and which domain's expiry is used). Saved values are stored in the portal database and **override `.env`** from the moment you save them; they take effect immediately, without restarting the portal. An empty SMTP host switches all portal mail off. The SMTP password is stored encrypted and never shown again — leave the field untouched to keep it. **Send Test Mail** sends one message through the current settings, **Preview Reminders** lists the users who would be mailed right now without sending anything, and **Send Reminders Now** mails them immediately (a stage already mailed for the same expiry date is never repeated). All three are audited (*Mail/reminder settings changed*, *Test mail*, *Manual reminder run*).
 - **Password Exceptions:** words or phrases that new passwords (change and reset) may not use. *Contains* blocks any password that includes the entry; *Exact* blocks only that exact password. Matching ignores case and common look-alikes (`@`→a, `0`→o, `1`→i/l, `3`→e, `$`/`5`→s, `7`→t, `4`→a), so `company` also blocks `C0mp@ny2026`. Entries can be edited, deactivated or removed and apply immediately, in addition to the domain password policy.
 
 Help-desk procedure for a user who lost their phone: check the user's identity by your normal process → **Reset Enrollment** → the user signs in (or you reset the AD password in ADUC) → the user enrolls again.
@@ -438,6 +441,9 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | PUT | `/api/admin/questions/:id` | admin | `{ questionText?, isActive?, sortOrder? }` |
 | GET/POST | `/api/admin/password-exceptions` | admin | POST `{ term, matchType?: 'contains'\|'exact' }` |
 | PUT/DELETE | `/api/admin/password-exceptions/:id` | admin | PUT `{ term?, matchType?, isActive? }` |
+| GET/PUT | `/api/admin/settings` | admin | PUT `{ settings: { 'mail.host', 'mail.port', 'mail.secure', 'mail.user', 'mail.password', 'mail.from', 'reminders.enabled', 'reminders.days', 'reminders.hour', 'reminders.source' } }` (only the keys sent are changed) |
+| POST | `/api/admin/settings/test-mail` | admin | `{ to }` |
+| POST | `/api/admin/reminders/run` | admin | `{ send?: boolean }` (default: preview only) |
 
 ## 12. Testing
 

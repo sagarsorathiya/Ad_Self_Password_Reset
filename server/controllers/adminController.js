@@ -2,6 +2,10 @@ const db = require('../config/db');
 const { MATCH_TYPES } = require('../services/passwordExceptionService');
 const { logAudit, getOrCreateUser } = require('./authController');
 const ldapService = require('../services/ldapService');
+const settingsService = require('../services/settingsService');
+const mailService = require('../services/mailService');
+const notificationService = require('../services/notificationService');
+const passwordReminderService = require('../services/passwordReminderService');
 
 const UAC_ACCOUNT_DISABLED = 2;
 
@@ -681,6 +685,121 @@ async function deletePasswordException(req, res) {
     }
 }
 
+// ---- Mail and expiry reminders (Administration -> Mail & Reminders) ----
+
+/**
+ * GET /api/admin/settings
+ * Effective mail and reminder settings, with the .env fallbacks. The SMTP password is never returned.
+ */
+async function getSettings(req, res) {
+    try {
+        res.json({ success: true, data: await settingsService.describe() });
+    } catch (err) {
+        console.error('[Admin] Get settings error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to load settings.' });
+    }
+}
+
+/**
+ * PUT /api/admin/settings
+ * Body: { settings: { 'mail.host': '...', 'reminders.days': '14,7,1', ... } }
+ * Only the keys sent are changed; an empty SMTP field falls back to .env, and the unchanged password
+ * placeholder keeps the stored secret.
+ */
+async function updateSettings(req, res) {
+    try {
+        const values = req.body?.settings;
+        if (!values || typeof values !== 'object' || Array.isArray(values)) {
+            return res.status(400).json({ success: false, message: 'No settings were supplied.' });
+        }
+
+        const changed = await settingsService.save(values, req.user.username);
+        if (changed.length) {
+            await logAudit(req.user.userId, req.user.username, 'settings_updated', null, req, true, changed.join(', '));
+        }
+
+        res.json({
+            success: true,
+            data: await settingsService.describe(),
+            message: changed.length ? 'Settings saved.' : 'No changes to save.',
+        });
+    } catch (err) {
+        if (err.validation) return res.status(400).json({ success: false, message: err.message });
+        console.error('[Admin] Update settings error:', err.message);
+        res.status(500).json({ success: false, message: 'Failed to save settings.' });
+    }
+}
+
+/**
+ * POST /api/admin/settings/test-mail
+ * Body: { to }  Sends one test message through the current settings.
+ */
+async function sendTestMail(req, res) {
+    const to = typeof req.body?.to === 'string' ? req.body.to.trim() : '';
+    try {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) || to.length > 255) {
+            return res.status(400).json({ success: false, message: 'Enter a valid recipient address.' });
+        }
+        if (!mailService.isEnabled()) {
+            return res.status(400).json({ success: false, message: 'Set an SMTP host before sending a test mail.' });
+        }
+
+        const { host, port, from } = settingsService.current().mail;
+        await mailService.send({
+            to,
+            subject: `${settingsService.current().mail.portalName}: test message`,
+            text: notificationService.testMessage({ host, port, from, requestedBy: req.user.username }),
+        });
+        await logAudit(req.user.userId, req.user.username, 'mail_test', null, req, true, `Test mail sent to ${to}`);
+
+        res.json({ success: true, message: `Test mail sent to ${to}.` });
+    } catch (err) {
+        await logAudit(req.user.userId, req.user.username, 'mail_test', null, req, false, err.message);
+        res.status(502).json({ success: false, message: `The relay refused the test mail: ${err.message}` });
+    }
+}
+
+/**
+ * POST /api/admin/reminders/run
+ * Body: { send?: boolean }  Runs the expiry reminder pass now: a preview by default, or a real send.
+ * The same per-stage records are used, so a manual send never duplicates a reminder already mailed.
+ */
+async function runReminders(req, res) {
+    const send = req.body?.send === true;
+    try {
+        if (send && !mailService.isEnabled()) {
+            return res.status(400).json({ success: false, message: 'Set an SMTP host before sending reminders.' });
+        }
+
+        const result = await passwordReminderService.runOnce({ dryRun: !send });
+        const summary = `${result.checked} checked, ${result.due.length} due`
+            + (send ? `, ${result.sent} sent, ${result.failed} failed` : ' (preview, nothing sent)');
+        await logAudit(req.user.userId, req.user.username, 'reminder_run', null, req, true, summary);
+
+        res.json({
+            success: true,
+            data: {
+                send,
+                checked: result.checked,
+                expiring: result.expiring,
+                skipped: result.skipped,
+                sent: result.sent,
+                failed: result.failed,
+                // Capped: a preview of a large domain can list thousands of accounts
+                due: result.due.slice(0, 200).map((d) => ({
+                    username: d.username, mail: d.mail, daysLeft: d.daysLeft, expiresAt: d.expiresAt,
+                })),
+                dueTotal: result.due.length,
+            },
+            message: summary,
+        });
+    } catch (err) {
+        console.error('[Admin] Reminder run error:', err.message);
+        await logAudit(req.user.userId, req.user.username, 'reminder_run', null, req, false, err.message);
+        res.status(502).json({ success: false, message: `The reminder run failed: ${err.message}` });
+    }
+}
+
 module.exports = {
     getUsers,
     getStats,
@@ -696,4 +815,8 @@ module.exports = {
     addPasswordException,
     updatePasswordException,
     deletePasswordException,
+    getSettings,
+    updateSettings,
+    sendTestMail,
+    runReminders,
 };

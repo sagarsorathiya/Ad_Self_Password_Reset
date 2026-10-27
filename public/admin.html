@@ -29,6 +29,7 @@
                 <button class="filter-tab" role="tab" data-tab="audit">Audit Log</button>
                 <button class="filter-tab" role="tab" data-tab="questions">Security Questions</button>
                 <button class="filter-tab" role="tab" data-tab="exceptions">Password Exceptions</button>
+                <button class="filter-tab" role="tab" data-tab="mail">Mail &amp; Reminders</button>
             </div>
 
             <!-- Users -->
@@ -93,6 +94,9 @@
                             <option value="password_exception_added">Password exception added</option>
                             <option value="password_exception_updated">Password exception updated</option>
                             <option value="password_exception_deleted">Password exception removed</option>
+                            <option value="settings_updated">Mail/reminder settings changed</option>
+                            <option value="mail_test">Test mail</option>
+                            <option value="reminder_run">Manual reminder run</option>
                         </select>
                         <input class="form-input" type="date" id="auditStart" aria-label="Start date" style="width: auto;">
                         <input class="form-input" type="date" id="auditEnd" aria-label="End date" style="width: auto;">
@@ -164,10 +168,123 @@
                     </table>
                 </div>
             </section>
+
+            <!-- Mail and expiry reminders -->
+            <section id="tab-mail" class="hidden">
+                <p class="text-sm text-muted mb-4">
+                    These settings apply immediately, without restarting the portal, and override the server's .env
+                    file once saved. An empty SMTP host switches all portal mail off.
+                </p>
+
+                <form id="mailForm" novalidate>
+                    <div class="card card-full mb-6">
+                        <h2 class="settings-title">SMTP relay</h2>
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label class="form-label" for="smtpHost">SMTP host</label>
+                                <input class="form-input" type="text" id="smtpHost" maxlength="255" autocomplete="off">
+                                <div class="form-hint">Empty = no alert or reminder mail is sent at all.</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smtpPort">Port</label>
+                                <input class="form-input" type="number" id="smtpPort" min="1" max="65535" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smtpFrom">From address</label>
+                                <input class="form-input" type="text" id="smtpFrom" maxlength="255" autocomplete="off"
+                                       placeholder="IT Service Desk &lt;it@corp.example&gt;">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smtpSecure">Encryption</label>
+                                <select class="form-select" id="smtpSecure">
+                                    <option value="false">STARTTLS when offered (port 25 / 587)</option>
+                                    <option value="true">Implicit TLS (port 465)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smtpUser">Username (optional)</label>
+                                <input class="form-input" type="text" id="smtpUser" maxlength="255" autocomplete="off">
+                                <div class="form-hint">Leave empty for a relay that accepts this server by IP.</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smtpPassword">Password (optional)</label>
+                                <input class="form-input" type="password" id="smtpPassword" maxlength="255" autocomplete="new-password">
+                                <div class="form-hint">Stored encrypted. Leave unchanged to keep the current one; empty = no login.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card card-full mb-6">
+                        <h2 class="settings-title">Expiry reminders</h2>
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label class="form-label" for="remEnabled">Reminder mails</label>
+                                <select class="form-select" id="remEnabled">
+                                    <option value="true">On</option>
+                                    <option value="false">Off</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="remDays">Days before expiry</label>
+                                <input class="form-input" type="text" id="remDays" maxlength="200" autocomplete="off"
+                                       placeholder="14,7,6,5,4,3,2,1">
+                                <div class="form-hint">One mail per listed day: 14,7,6,5,4,3,2,1 = once two weeks before,
+                                    then daily in the last week.</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="remHour">Daily run from</label>
+                                <select class="form-select" id="remHour"></select>
+                                <div class="form-hint">Server local time; the pass runs once a day.</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="remSource">Expiry read from</label>
+                                <select class="form-select" id="remSource"></select>
+                                <div class="form-hint">Mails always go to the sign-in domain's address.</div>
+                            </div>
+                        </div>
+                        <p class="text-sm text-muted" id="remEffective"></p>
+                    </div>
+
+                    <div class="toolbar">
+                        <div class="toolbar-left" style="gap: var(--space-2);">
+                            <button type="submit" class="btn btn-primary" id="mailSaveBtn">Save Settings</button>
+                            <button type="button" class="btn btn-secondary" id="mailReloadBtn">Reload</button>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="card card-full mb-6">
+                    <h2 class="settings-title">Test and manual run</h2>
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="testMailTo">Send a test mail to</label>
+                            <input class="form-input" type="email" id="testMailTo" maxlength="255" autocomplete="off"
+                                   placeholder="you@corp.example">
+                            <div class="form-hint">Uses the settings above, as saved.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="testMailBtn">Test mail</label>
+                            <button type="button" class="btn btn-secondary" id="testMailBtn">Send Test Mail</button>
+                        </div>
+                    </div>
+                    <div class="settings-divider"></div>
+                    <p class="text-sm text-muted">
+                        Preview lists the users who would get a reminder right now and sends nothing. Send now mails them
+                        immediately; a stage already mailed for the same expiry date is never sent twice.
+                    </p>
+                    <div class="toolbar">
+                        <div class="toolbar-left" style="gap: var(--space-2);">
+                            <button type="button" class="btn btn-secondary" id="remPreviewBtn">Preview Reminders</button>
+                            <button type="button" class="btn btn-primary" id="remSendBtn">Send Reminders Now</button>
+                        </div>
+                    </div>
+                    <div id="remResult"></div>
+                </div>
+            </section>
         </main>
     </div>
 
     <script src="/js/app.js"></script>
-    <script src="/js/admin.js"></script>
+    <script src="/js/admin.js?v=20261027"></script>
 </body>
 </html>

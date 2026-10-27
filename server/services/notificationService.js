@@ -124,4 +124,22 @@ async function sendPasswordChangedAlert({ userId, username, method, req, sync, a
     }
 }
 
-module.exports = { passwordChangedMessage, passwordExpiringMessage, sendPasswordChangedAlert };
+/**
+ * Body of the test mail an admin sends from Administration -> Mail & Reminders.
+ * @param {object} p - { host, port, from, requestedBy }
+ */
+function testMessage({ host, port, from, requestedBy }) {
+    return [
+        `This is a test message from ${config.mail.portalName}.`,
+        '',
+        `Relay:        ${host}:${port}`,
+        `From address: ${from}`,
+        `Requested by: ${requestedBy}`,
+        `Sent:         ${dateTime.format(new Date())} (${TIME_ZONE})`,
+        '',
+        'If you received this, password alerts and expiry reminders can reach your users.',
+        ...portalLine(),
+    ].join('\n');
+}
+
+module.exports = { passwordChangedMessage, passwordExpiringMessage, sendPasswordChangedAlert, testMessage };

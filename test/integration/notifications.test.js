@@ -122,11 +122,18 @@ describe('expiry reminders', () => {
     }
 
     test('stages follow the configured days', () => {
+        // Default stages: one mail 14 days out, then one per day over the last week
         assert.equal(reminders.currentStage(20), null);
         assert.equal(reminders.currentStage(14), 14);
         assert.equal(reminders.currentStage(10), 14);
-        assert.equal(reminders.currentStage(5), 7);
+        assert.equal(reminders.currentStage(5), 5);
         assert.equal(reminders.currentStage(1), 1);
+
+        // A custom list (as set in the admin panel) is honoured
+        const stages = [14, 7, 3, 1];
+        assert.equal(reminders.currentStage(10, stages), 14);
+        assert.equal(reminders.currentStage(5, stages), 7);
+        assert.equal(reminders.currentStage(2, stages), 3);
     });
 
     test('mails each stage once per expiry date', async () => {

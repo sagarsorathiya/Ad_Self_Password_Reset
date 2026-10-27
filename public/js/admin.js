@@ -25,7 +25,7 @@
             t.classList.toggle('active', active);
             t.setAttribute('aria-selected', String(active));
         });
-        ['users', 'audit', 'questions', 'exceptions'].forEach((n) => {
+        ['users', 'audit', 'questions', 'exceptions', 'mail'].forEach((n) => {
             document.getElementById(`tab-${n}`).classList.toggle('hidden', n !== name);
         });
         if (!loadedTabs.has(name)) {
@@ -33,6 +33,7 @@
             if (name === 'audit') loadAudit();
             if (name === 'questions') loadQuestions();
             if (name === 'exceptions') loadExceptions();
+            if (name === 'mail') loadSettings();
         }
     }
 
@@ -637,6 +638,183 @@
 
     function humanize(value) {
         return String(value).replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+    }
+
+
+    // ---- Mail and expiry reminders ----
+
+    const mailForm = document.getElementById('mailForm');
+    const remResult = document.getElementById('remResult');
+    let settingsCache = null;
+
+    // Hour choices for the daily run
+    const remHour = document.getElementById('remHour');
+    for (let hour = 0; hour < 24; hour++) {
+        const option = document.createElement('option');
+        option.value = String(hour);
+        option.textContent = `${String(hour).padStart(2, '0')}:00`;
+        remHour.appendChild(option);
+    }
+
+    async function loadSettings() {
+        try {
+            const { data } = await api('GET', '/api/admin/settings');
+            settingsCache = data;
+            renderSettings(data);
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    }
+
+    function renderSettings(data) {
+        document.getElementById('smtpHost').value = data.mail.host || '';
+        document.getElementById('smtpPort').value = data.mail.port ?? '';
+        document.getElementById('smtpFrom').value = data.mail.from || '';
+        document.getElementById('smtpSecure').value = String(Boolean(data.mail.secure));
+        document.getElementById('smtpUser').value = data.mail.user || '';
+        document.getElementById('smtpPassword').value = data.mail.password || '';
+        document.getElementById('remEnabled').value = String(Boolean(data.reminders.enabled));
+        document.getElementById('remDays').value = (data.reminders.days || []).join(',');
+        remHour.value = String(data.reminders.hour ?? 9);
+
+        const source = document.getElementById('remSource');
+        source.innerHTML = '';
+        const choices = [{ value: 'primary', label: `${data.primaryDomain} (sign-in domain)` }];
+        if (data.secondaryDomain) choices.push({ value: 'secondary', label: data.secondaryDomain });
+        choices.forEach((choice) => {
+            const option = document.createElement('option');
+            option.value = choice.value;
+            option.textContent = choice.label;
+            source.appendChild(option);
+        });
+        source.value = data.reminders.source === 'secondary' && data.secondaryDomain ? 'secondary' : 'primary';
+        source.disabled = !data.secondaryDomain;
+
+        const effective = data.reminders.enabled
+            ? `Reminders are on: ${(data.reminders.days || []).join(', ')} day(s) before expiry, daily from `
+              + `${String(data.reminders.hour).padStart(2, '0')}:00 server time.`
+            : 'Reminders are off; no expiry mails are sent.';
+        const stored = data.overrides.length
+            ? ` Stored in the portal: ${data.overrides.join(', ')}. Any other value comes from .env.`
+            : ' All values currently come from the server .env file.';
+        document.getElementById('remEffective').textContent = effective + stored;
+    }
+
+    document.getElementById('mailReloadBtn').addEventListener('click', loadSettings);
+
+    mailForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const password = document.getElementById('smtpPassword').value;
+        const settings = {
+            'mail.host': document.getElementById('smtpHost').value.trim(),
+            'mail.port': document.getElementById('smtpPort').value.trim(),
+            'mail.from': document.getElementById('smtpFrom').value.trim(),
+            'mail.secure': document.getElementById('smtpSecure').value,
+            'mail.user': document.getElementById('smtpUser').value.trim(),
+            'reminders.enabled': document.getElementById('remEnabled').value,
+            'reminders.days': document.getElementById('remDays').value.trim(),
+            'reminders.hour': remHour.value,
+            'reminders.source': document.getElementById('remSource').value,
+        };
+        // Sent only when the admin typed something: the untouched placeholder keeps the stored secret
+        if (password !== (settingsCache?.mail.password || '')) settings['mail.password'] = password;
+
+        const btn = document.getElementById('mailSaveBtn');
+        setButtonLoading(btn, true, 'Saving...');
+        try {
+            const { data, message } = await api('PUT', '/api/admin/settings', { settings });
+            settingsCache = data;
+            renderSettings(data);
+            showToast(message || 'Settings saved.', 'success');
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    });
+
+    document.getElementById('testMailBtn').addEventListener('click', async (e) => {
+        const to = document.getElementById('testMailTo').value.trim();
+        if (!to) {
+            showToast('Enter a recipient address for the test mail.', 'error');
+            return;
+        }
+        setButtonLoading(e.currentTarget, true, 'Sending...');
+        try {
+            const { message } = await api('POST', '/api/admin/settings/test-mail', { to });
+            showToast(message || 'Test mail sent.', 'success');
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            setButtonLoading(e.currentTarget, false);
+        }
+    });
+
+    document.getElementById('remPreviewBtn').addEventListener('click', (e) => runReminders(e.currentTarget, false));
+
+    document.getElementById('remSendBtn').addEventListener('click', (e) => {
+        const btn = e.currentTarget;
+        openModal({
+            title: 'Send reminders now',
+            content: 'Expiry reminder mails will be sent immediately to every user who is due a reminder today. '
+                + 'Stages already mailed for the same expiry date are skipped. Continue?',
+            confirmText: 'Send Now',
+            onConfirm: async () => {
+                await runReminders(btn, true);
+                return true;
+            },
+        });
+    });
+
+    async function runReminders(btn, send) {
+        setButtonLoading(btn, true, send ? 'Sending...' : 'Checking...');
+        remResult.textContent = '';
+        try {
+            const { data, message } = await api('POST', '/api/admin/reminders/run', { send });
+            renderReminderResult(data);
+            showToast(message, data.failed ? 'error' : 'success');
+        } catch (err) {
+            remResult.textContent = err.message;
+            showToast(err.message, 'error');
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    }
+
+    function renderReminderResult(data) {
+        const skipped = Object.entries(data.skipped || {})
+            .map(([reason, count]) => `${escapeHtml(reason)}: ${Number(count)}`).join(' · ');
+        const summary = `
+            <div class="settings-summary">
+                <span><strong>${Number(data.checked)}</strong> accounts checked</span>
+                <span><strong>${Number(data.dueTotal)}</strong> due now</span>
+                ${data.send ? `<span><strong>${Number(data.sent)}</strong> sent</span>
+                <span><strong>${Number(data.failed)}</strong> failed</span>`
+                    : '<span>preview only, nothing was sent</span>'}
+            </div>
+            ${skipped ? `<p class="text-sm text-muted">Skipped — ${skipped}</p>` : ''}`;
+
+        if (!data.due.length) {
+            remResult.innerHTML = `${summary}<p class="text-sm text-muted">No user is due a reminder right now.</p>`;
+            return;
+        }
+        const rows = data.due.map((d) => `
+            <tr>
+                <td>${escapeHtml(d.username)}</td>
+                <td>${escapeHtml(d.mail || '')}</td>
+                <td>${Number(d.daysLeft)}</td>
+                <td>${escapeHtml(new Date(d.expiresAt).toLocaleDateString())}</td>
+            </tr>`).join('');
+        const capped = data.dueTotal > data.due.length
+            ? `<p class="text-sm text-muted">Showing the first ${data.due.length} of ${Number(data.dueTotal)}.</p>`
+            : '';
+        remResult.innerHTML = `${summary}
+            <div class="table-container">
+                <table class="data-table">
+                    <thead><tr><th>User</th><th>Mail</th><th>Days left</th><th>Expires</th></tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>${capped}`;
     }
 
     // ---- Initial load ----
