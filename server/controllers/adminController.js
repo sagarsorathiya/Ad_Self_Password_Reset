@@ -772,7 +772,7 @@ async function runReminders(req, res) {
         }
 
         const result = await passwordReminderService.runOnce({ dryRun: !send });
-        const summary = `${result.checked} checked, ${result.due.length} due`
+        const summary = `${result.checked} checked, ${result.inWindow} in the reminder window, ${result.due.length} due`
             + (send ? `, ${result.sent} sent, ${result.failed} failed` : ' (preview, nothing sent)');
         await logAudit(req.user.userId, req.user.username, 'reminder_run', null, req, true, summary);
 
@@ -781,13 +781,22 @@ async function runReminders(req, res) {
             data: {
                 send,
                 checked: result.checked,
+                withExpiry: result.withExpiry,
+                expired: result.expired,
+                inWindow: result.inWindow,
                 expiring: result.expiring,
                 skipped: result.skipped,
                 sent: result.sent,
                 failed: result.failed,
+                // Users whose current stage was mailed earlier (most recent first), so a preview shows them too
+                reminded: result.reminded
+                    .sort((a, b) => a.daysLeft - b.daysLeft)
+                    .slice(0, 200)
+                    .map((r) => ({ username: r.username, daysLeft: r.daysLeft, stage: r.stage, sentAt: r.sentAt })),
+                remindedTotal: result.reminded.length,
                 // Capped: a preview of a large domain can list thousands of accounts
                 due: result.due.slice(0, 200).map((d) => ({
-                    username: d.username, mail: d.mail, daysLeft: d.daysLeft, expiresAt: d.expiresAt,
+                    username: d.username, mail: d.mail, daysLeft: d.daysLeft, stage: d.stage, expiresAt: d.expiresAt,
                 })),
                 dueTotal: result.due.length,
             },

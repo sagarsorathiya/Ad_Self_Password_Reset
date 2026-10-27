@@ -884,6 +884,7 @@ button.method-card {
 .settings-divider { border-top: 1px solid var(--color-border); margin: var(--space-5) 0; }
 .settings-summary { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-bottom: var(--space-3); }
 .settings-summary span { font-size: var(--font-size-sm); color: var(--color-text-muted); }
+#remResult .settings-title { margin-top: var(--space-5); font-size: var(--font-size-base); }
 
 @media (max-width: 640px) {
     .settings-grid { grid-template-columns: 1fr; }

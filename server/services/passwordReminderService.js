@@ -52,21 +52,36 @@ async function runOnce({ now = new Date(), dryRun = false } = {}) {
     const fromSecondary = expirySource === 'secondary';
     const source = fromSecondary ? ldapService.secondary : ldapService;
     const entries = await source.listPasswordExpiries();
-    // expiring: within the reminder window and not yet reminded; skipped: reason → count (second-domain source)
-    const result = { checked: entries.length, expiring: 0, skipped: {}, due: [], sent: 0, failed: 0 };
+    // withExpiry/expired: every account the source reports; inWindow: has reached a stage;
+    // expiring: in the window and not yet reminded; skipped: reason → count (second-domain source)
+    const result = {
+        checked: entries.length, withExpiry: 0, expired: 0, inWindow: 0, reminded: [],
+        expiring: 0, skipped: {}, due: [], sent: 0, failed: 0,
+    };
 
     for (const entry of entries) {
         if (!entry.expiresAt) continue;
+        result.withExpiry++;
         const daysLeft = Math.ceil((entry.expiresAt - now) / DAY_MS);
-        if (daysLeft <= 0) continue;
+        if (daysLeft <= 0) {
+            result.expired++;
+            continue;
+        }
         const stage = currentStage(daysLeft, days);
         if (stage === null) continue;
+        result.inWindow++;
 
         const already = await db.query(
-            'SELECT 1 FROM password_reminders WHERE username = $1 AND expires_at = $2 AND days_before = $3',
+            'SELECT sent_at FROM password_reminders WHERE username = $1 AND expires_at = $2 AND days_before = $3',
             [entry.username.toLowerCase(), entry.expiresAt, stage]
         );
-        if (already.rows.length) continue;
+        if (already.rows.length) {
+            // Already mailed for this stage: reported so a preview still shows who is covered
+            result.reminded.push({
+                username: entry.username, daysLeft, stage, expiresAt: entry.expiresAt, sentAt: already.rows[0].sent_at,
+            });
+            continue;
+        }
 
         result.expiring++;
         let user = entry;
@@ -78,7 +93,7 @@ async function runOnce({ now = new Date(), dryRun = false } = {}) {
             }
             user = account.user;
         }
-        result.due.push({ username: user.username, mail: user.mail, daysLeft, expiresAt: entry.expiresAt });
+        result.due.push({ username: user.username, mail: user.mail, daysLeft, stage, expiresAt: entry.expiresAt });
         if (dryRun) continue;
 
         // Claimed before sending, so two runs can never mail the same stage twice

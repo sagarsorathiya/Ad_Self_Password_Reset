@@ -269,8 +269,10 @@
                     </div>
                     <div class="settings-divider"></div>
                     <p class="text-sm text-muted">
-                        Preview lists the users who would get a reminder right now and sends nothing. Send now mails them
-                        immediately; a stage already mailed for the same expiry date is never sent twice.
+                        Preview checks the directory and reports how many accounts have an expiring password, how many are
+                        inside the reminder window, who was already mailed for their current stage and who is due now. It
+                        sends nothing. Send now mails everyone due; a stage already mailed for the same expiry date is
+                        never sent twice.
                     </p>
                     <div class="toolbar">
                         <div class="toolbar-left" style="gap: var(--space-2);">
@@ -285,6 +287,6 @@
     </div>
 
     <script src="/js/app.js"></script>
-    <script src="/js/admin.js?v=20261027"></script>
+    <script src="/js/admin.js?v=20261027b"></script>
 </body>
 </html>

@@ -192,6 +192,10 @@ describe('mail and reminder settings', () => {
         assert.equal(preview.status, 200);
         assert.equal(preview.body.data.send, false);
         assert.equal(sent.length, 0);
+        // The overview covers every scanned account, not only the ones due now
+        assert.ok(preview.body.data.withExpiry >= 1);
+        assert.ok(preview.body.data.inWindow >= 1);
+        assert.equal(preview.body.data.remindedTotal, 0);
         const due = preview.body.data.due.find((d) => d.username === 'jsmith');
         assert.equal(due.daysLeft, 5);
         assert.equal((await db.query('SELECT 1 FROM password_reminders')).rows.length, 0);
@@ -201,9 +205,14 @@ describe('mail and reminder settings', () => {
         assert.equal(run.body.data.sent, preview.body.data.dueTotal);
         assert.ok(sent.some((m) => /expires in 5 days/i.test(m.subject)));
 
-        // The same stage is not mailed twice
+        // The same stage is not mailed twice, and those users are now reported as already reminded
         const again = await api('POST', '/api/admin/reminders/run', { send: true }, token);
         assert.equal(again.body.data.sent, 0);
+        assert.equal(again.body.data.dueTotal, 0);
+        assert.equal(again.body.data.remindedTotal, run.body.data.sent);
+        const reminded = again.body.data.reminded.find((r) => r.username === 'jsmith');
+        assert.equal(reminded.stage, 5);
+        assert.ok(reminded.sentAt);
 
         const audit = (await db.query("SELECT details FROM audit_log WHERE action = 'reminder_run' ORDER BY id")).rows;
         assert.equal(audit.length, 3);

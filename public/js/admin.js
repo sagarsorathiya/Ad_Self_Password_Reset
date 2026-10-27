@@ -783,38 +783,83 @@
 
     function renderReminderResult(data) {
         const skipped = Object.entries(data.skipped || {})
-            .map(([reason, count]) => `${escapeHtml(reason)}: ${Number(count)}`).join(' · ');
+            .map(([reason, count]) => `${escapeHtml(reason)}: ${Number(count)}`).join(' \u00b7 ');
         const summary = `
             <div class="settings-summary">
                 <span><strong>${Number(data.checked)}</strong> accounts checked</span>
+                <span><strong>${Number(data.withExpiry)}</strong> with an expiring password</span>
+                <span><strong>${Number(data.inWindow)}</strong> inside the reminder window</span>
+                <span><strong>${Number(data.remindedTotal)}</strong> already reminded</span>
                 <span><strong>${Number(data.dueTotal)}</strong> due now</span>
                 ${data.send ? `<span><strong>${Number(data.sent)}</strong> sent</span>
                 <span><strong>${Number(data.failed)}</strong> failed</span>`
                     : '<span>preview only, nothing was sent</span>'}
             </div>
-            ${skipped ? `<p class="text-sm text-muted">Skipped — ${skipped}</p>` : ''}`;
+            ${skipped ? `<p class="text-sm text-muted">Skipped \u2014 ${skipped}</p>` : ''}`;
 
-        if (!data.due.length) {
-            remResult.innerHTML = `${summary}<p class="text-sm text-muted">No user is due a reminder right now.</p>`;
-            return;
-        }
-        const rows = data.due.map((d) => `
-            <tr>
-                <td>${escapeHtml(d.username)}</td>
-                <td>${escapeHtml(d.mail || '')}</td>
-                <td>${Number(d.daysLeft)}</td>
-                <td>${escapeHtml(new Date(d.expiresAt).toLocaleDateString())}</td>
-            </tr>`).join('');
-        const capped = data.dueTotal > data.due.length
-            ? `<p class="text-sm text-muted">Showing the first ${data.due.length} of ${Number(data.dueTotal)}.</p>`
-            : '';
-        remResult.innerHTML = `${summary}
+        // Per stage: who still has to be mailed and who already was, so every expiring user is accounted for
+        const perStage = new Map();
+        const bucket = (stage) => {
+            if (!perStage.has(stage)) perStage.set(stage, { stage, due: 0, reminded: 0 });
+            return perStage.get(stage);
+        };
+        (data.due || []).forEach((d) => { bucket(Number(d.stage)).due++; });
+        (data.reminded || []).forEach((r) => { bucket(Number(r.stage)).reminded++; });
+        const stageRows = [...perStage.values()]
+            .sort((a, b) => b.stage - a.stage)
+            .map((row) => `
+                <tr>
+                    <td>${row.stage} day${row.stage === 1 ? '' : 's'} before expiry</td>
+                    <td>${row.reminded}</td>
+                    <td>${row.due}</td>
+                </tr>`).join('');
+        const stageTable = stageRows ? `
+            <h3 class="settings-title">Users per stage</h3>
+            <div class="table-container">
+                <table class="data-table">
+                    <thead><tr><th>Stage</th><th>Already reminded</th><th>Due now</th></tr></thead>
+                    <tbody>${stageRows}</tbody>
+                </table>
+            </div>` : '';
+
+        const dueTable = data.due.length ? `
+            <h3 class="settings-title">Due now</h3>
             <div class="table-container">
                 <table class="data-table">
                     <thead><tr><th>User</th><th>Mail</th><th>Days left</th><th>Expires</th></tr></thead>
-                    <tbody>${rows}</tbody>
+                    <tbody>${data.due.map((d) => `
+                        <tr>
+                            <td>${escapeHtml(d.username)}</td>
+                            <td>${escapeHtml(d.mail || '')}</td>
+                            <td>${Number(d.daysLeft)}</td>
+                            <td>${escapeHtml(new Date(d.expiresAt).toLocaleDateString())}</td>
+                        </tr>`).join('')}</tbody>
                 </table>
-            </div>${capped}`;
+            </div>
+            ${data.dueTotal > data.due.length
+                ? `<p class="text-sm text-muted">Showing the first ${data.due.length} of ${Number(data.dueTotal)}.</p>` : ''}`
+            : `<p class="text-sm text-muted">No user is due a reminder right now${
+                data.remindedTotal ? '; everyone in the window has already been mailed for their current stage.' : '.'}</p>`;
+
+        const remindedTable = data.reminded.length ? `
+            <h3 class="settings-title">Already reminded (current stage)</h3>
+            <div class="table-container">
+                <table class="data-table">
+                    <thead><tr><th>User</th><th>Days left</th><th>Stage</th><th>Mailed</th></tr></thead>
+                    <tbody>${data.reminded.map((r) => `
+                        <tr>
+                            <td>${escapeHtml(r.username)}</td>
+                            <td>${Number(r.daysLeft)}</td>
+                            <td>${Number(r.stage)}</td>
+                            <td>${escapeHtml(new Date(r.sentAt).toLocaleString())}</td>
+                        </tr>`).join('')}</tbody>
+                </table>
+            </div>
+            ${data.remindedTotal > data.reminded.length
+                ? `<p class="text-sm text-muted">Showing the first ${data.reminded.length} of ${Number(data.remindedTotal)}.</p>` : ''}`
+            : '';
+
+        remResult.innerHTML = summary + stageTable + dueTable + remindedTable;
     }
 
     // ---- Initial load ----
