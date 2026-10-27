@@ -125,7 +125,7 @@ async function getStats(req, res) {
 /**
  * GET /api/admin/audit-log
  * View audit log with filtering and pagination.
- * Query params: page, limit, username, action, startDate, endDate
+ * Query params: page, limit, username (partial match), action, startDate, endDate
  */
 async function getAuditLog(req, res) {
     try {
@@ -136,9 +136,10 @@ async function getAuditLog(req, res) {
         const conditions = [];
         const params = [];
 
+        // Partial, case-insensitive match so "sagar" also finds "sagar.s"
         if (req.query.username) {
-            params.push(req.query.username);
-            conditions.push(`username = $${params.length}`);
+            params.push(`%${req.query.username}%`);
+            conditions.push(`username ILIKE $${params.length}`);
         }
 
         if (req.query.action) {

@@ -1,7 +1,7 @@
 // Daily password expiry reminders (PASSWORD_REMINDERS=true) to every enabled first-domain user with a mail address.
 // The expiry comes from PASSWORD_REMINDER_SOURCE: the first domain, or the second one when only it expires passwords
 // (then only users the sync would update and who can sign in to the portal are reminded).
-// Each stage (e.g. 14, 7, 3, 1 days before expiry) is mailed once per expiry date; password_reminders records
+// Each stage (e.g. 14 days before expiry, then daily over the last week) is mailed once per expiry date; password_reminders records
 // what was sent, so restarts and repeated runs never send duplicates, and a new password starts a new cycle.
 const config = require('../config/default');
 const db = require('../config/db');
@@ -16,7 +16,7 @@ const UAC_ACCOUNT_DISABLED = 2;
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const NO_REQUEST = { headers: {} };
 
-// Most urgent stage reached: 10 days left with stages 14,7,3,1 → 14; 5 days left → 7
+// Most urgent stage reached: 10 days left with stages 14,7,6,5,4,3,2,1 → 14; 5 days left → 5
 function currentStage(daysLeft, days = config.reminders.days) {
     const reached = days.filter((d) => daysLeft <= d);
     return reached.length ? Math.min(...reached) : null;

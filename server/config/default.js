@@ -143,7 +143,7 @@ const config = {
     // Password expiry reminders, sent once per stage (days before expiry) to every enabled AD user with a mail address
     reminders: {
         enabled: process.env.PASSWORD_REMINDERS === 'true',
-        days: (process.env.PASSWORD_REMINDER_DAYS || '14,7,3,1')
+        days: (process.env.PASSWORD_REMINDER_DAYS || '14,7,6,5,4,3,2,1')
             .split(',').map((d) => parseInt(d.trim(), 10)).filter((d) => d > 0),
         // Local hour from which the daily run starts (0-23)
         hour: parseInt(process.env.PASSWORD_REMINDER_HOUR, 10) || 9,
