@@ -136,7 +136,7 @@ async function refresh() {
 /**
  * Validate and store admin-supplied values. Only the keys present in `values` are written, and a saved value
  * always wins over .env: an empty SMTP host is stored as "mail off", not as a fallback to SMTP_HOST.
- * @param {object} values - flat map of FIELDS keys, e.g. { 'mail.host': '10.0.0.1', 'reminders.days': '14,7,1' }
+ * @param {object} values - flat map of FIELDS keys, e.g. { 'mail.host': 'relay.corp.example', 'reminders.days': '14,7,1' }
  * @param {string} actor - admin username, recorded in app_settings.updated_by
  * @returns {Promise<string[]>} the keys that were written or cleared
  */

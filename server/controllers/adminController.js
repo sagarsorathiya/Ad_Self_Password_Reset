@@ -140,7 +140,7 @@ async function getAuditLog(req, res) {
         const conditions = [];
         const params = [];
 
-        // Partial, case-insensitive match so "sagar" also finds "sagar.s"
+        // Partial, case-insensitive match so "jsmith" also finds "jsmith.adm"
         if (req.query.username) {
             params.push(`%${req.query.username}%`);
             conditions.push(`username ILIKE $${params.length}`);
