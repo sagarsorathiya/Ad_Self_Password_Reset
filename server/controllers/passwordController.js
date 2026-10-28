@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../config/default');
+const settingsService = require('../services/settingsService');
 const db = require('../config/db');
 const ldapService = require('../services/ldapService');
 const totpService = require('../services/totpService');
@@ -22,7 +23,7 @@ async function decoyQuestions(username) {
     return active.rows
         .map((row) => ({ row, rank: crypto.createHmac('sha256', config.jwt.secret).update(`${key}:${row.id}`).digest('hex') }))
         .sort((a, b) => (a.rank < b.rank ? -1 : 1))
-        .slice(0, 3)
+        .slice(0, settingsService.current().security.questionCount)
         .map(({ row }) => row);
 }
 
@@ -266,10 +267,13 @@ async function verifySecurityQuestions(req, res) {
             return res.status(400).json({ success: false, message: 'Please verify with your authenticator app.' });
         }
 
-        if (typeof username !== 'string' || !username || !Array.isArray(answers) || answers.length !== 3) {
+        // The count is not fixed here: every stored question must be answered (checked below), and users
+        // enrolled under an older setting can still have more than the current number.
+        if (typeof username !== 'string' || !username || !Array.isArray(answers)
+            || answers.length < 1 || answers.length > 10) {
             return res.status(400).json({
                 success: false,
-                message: 'Username and 3 answers are required.',
+                message: 'Username and your security answers are required.',
             });
         }
 

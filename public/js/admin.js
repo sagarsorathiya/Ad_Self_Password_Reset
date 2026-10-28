@@ -12,6 +12,8 @@
     const usersState = { page: 1, limit: 25, search: '', filter: 'all' };
     const auditState = { page: 1, limit: 50, username: '', action: '', startDate: '', endDate: '' };
     const loadedTabs = new Set();
+    // Mail, reminder and security settings, shared by the Questions and Mail tabs
+    let settingsCache = null;
 
     // ---- Tabs ----
 
@@ -290,8 +292,41 @@
 
     document.getElementById('addQuestionBtn').addEventListener('click', () => openQuestionModal());
 
+    const sqCount = document.getElementById('sqCount');
+
+    document.getElementById('sqCountSaveBtn').addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        setButtonLoading(btn, true, 'Saving...');
+        try {
+            const { data } = await api('PUT', '/api/admin/settings', {
+                settings: { 'security.questionCount': sqCount.value },
+            });
+            settingsCache = data;
+            renderQuestionCount(data.security.questionCount);
+            showToast(`Users now set ${data.security.questionCount} security questions.`, 'success');
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    });
+
+    function renderQuestionCount(count) {
+        sqCount.value = String(count);
+        document.getElementById('questionsIntro').textContent =
+            `Users choose ${count} of the active questions during enrollment. Deactivating a question hides it from new `
+            + 'enrollments; existing users keep it.';
+    }
+
     async function loadQuestions() {
         setTableMessage(questionsBody, 4, 'Loading...');
+        try {
+            const { data } = await api('GET', '/api/admin/settings');
+            settingsCache = data;
+            renderQuestionCount(data.security.questionCount);
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
         try {
             const { data } = await api('GET', '/api/admin/questions');
             questionsCache = data;
@@ -645,7 +680,6 @@
 
     const mailForm = document.getElementById('mailForm');
     const remResult = document.getElementById('remResult');
-    let settingsCache = null;
 
     // Hour choices for the daily run
     const remHour = document.getElementById('remHour');

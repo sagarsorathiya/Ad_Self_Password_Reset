@@ -119,6 +119,11 @@ const config = {
         policy: process.env.RESET_POLICY || 'both',
     },
 
+    // How many security questions a user sets and must answer at reset (admin panel overrides this)
+    security: {
+        questionCount: Math.min(5, Math.max(2, parseInt(process.env.SECURITY_QUESTION_COUNT, 10) || 3)),
+    },
+
     // Outgoing mail (security alerts and expiry reminders). Empty SMTP_HOST = no mail is sent.
     mail: {
         host: process.env.SMTP_HOST || '',

@@ -376,7 +376,7 @@ Members of `AD_ADMIN_GROUP` and portal admins see **Admin** in the navigation ba
 - **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers and authenticator, which you'd use for a lost phone. They must enroll again at their next sign-in.
 - **Portal admins:** **+ Add Admin** grants admin rights by AD username (the account must exist and be enabled; it doesn't need to have signed in yet). **Make Admin** / **Remove Admin** on a user row does the same for existing users, and the *Portal Admins* filter lists them. Changes apply immediately, without signing in again, and are audited (*Admin granted*, *Admin removed*). You can't remove your own rights, and locking a portal admin also blocks their admin access. Members of `AD_ADMIN_GROUP` are always admins and can't be removed here.
 - **Audit Log:** filter by username (partial match), action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), every mail/reminder settings change, test mail and manual reminder run, including failures.
-- **Security Questions:** add, edit, reorder, deactivate. Deactivating a question hides it from new enrollments; existing users keep it.
+- **Security Questions:** set how many questions each user must answer (2 to 5, default 3) and manage the list: add, edit, reorder, deactivate. The count applies to new enrollments at once; a user who already set more keeps them and is still asked all of them when resetting, until they save their questions again - then they move to the new count. Deactivating a question hides it from new enrollments; existing users keep it.
 - **Mail & Reminders:** the SMTP relay (host, port, encryption, optional login, From address) and the expiry reminders (on/off, the day stages, the daily run hour, and which domain's expiry is used). Saved values are stored in the portal database and **override `.env`** from the moment you save them; they take effect immediately, without restarting the portal. An empty SMTP host switches all portal mail off. The SMTP password is stored encrypted and never shown again — leave the field untouched to keep it. **Send Test Mail** sends one message through the current settings. **Preview Reminders** checks the directory and sends nothing: it reports how many accounts were scanned, how many have an expiring password, how many are inside the reminder window, who was already mailed for their current stage (with the time) and who is due now, plus a per-stage table and the reasons any account was skipped. **Send Reminders Now** mails everyone due immediately (a stage already mailed for the same expiry date is never repeated). All three are audited (*Mail/reminder settings changed*, *Test mail*, *Manual reminder run*).
 - **Password Exceptions:** words or phrases that new passwords (change and reset) may not use. *Contains* blocks any password that includes the entry; *Exact* blocks only that exact password. Matching ignores case and common look-alikes (`@`→a, `0`→o, `1`→i/l, `3`→e, `$`/`5`→s, `7`→t, `4`→a), so `company` also blocks `C0mp@ny2026`. Entries can be edited, deactivated or removed and apply immediately, in addition to the domain password policy.
 
@@ -439,11 +439,11 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | POST | `/api/admin/admins` | admin | `{ username }` (enabled AD account) |
 | GET | `/api/admin/stats` | admin | – |
 | GET | `/api/admin/audit-log` | admin | `?page&limit&username&action&startDate&endDate` |
-| GET/POST | `/api/admin/questions` | admin | POST `{ questionText, sortOrder? }` |
+| GET/POST | `/api/admin/questions` | admin | POST `{ questionText, sortOrder? }`; the count per user is `security.questionCount` under `/api/admin/settings` |
 | PUT | `/api/admin/questions/:id` | admin | `{ questionText?, isActive?, sortOrder? }` |
 | GET/POST | `/api/admin/password-exceptions` | admin | POST `{ term, matchType?: 'contains'\|'exact' }` |
 | PUT/DELETE | `/api/admin/password-exceptions/:id` | admin | PUT `{ term?, matchType?, isActive? }` |
-| GET/PUT | `/api/admin/settings` | admin | PUT `{ settings: { 'mail.host', 'mail.port', 'mail.secure', 'mail.user', 'mail.password', 'mail.from', 'reminders.enabled', 'reminders.days', 'reminders.hour', 'reminders.source' } }` (only the keys sent are changed) |
+| GET/PUT | `/api/admin/settings` | admin | PUT `{ settings: { 'mail.host', 'mail.port', 'mail.secure', 'mail.user', 'mail.password', 'mail.from', 'reminders.enabled', 'reminders.days', 'reminders.hour', 'reminders.source', 'security.questionCount' } }` (only the keys sent are changed) |
 | POST | `/api/admin/settings/test-mail` | admin | `{ to }` |
 | POST | `/api/admin/reminders/run` | admin | `{ send?: boolean }` (default: preview only) → counts (`checked`, `withExpiry`, `expired`, `inWindow`, `dueTotal`, `remindedTotal`, `sent`, `failed`), `due`, `reminded`, `skipped` |
 
@@ -452,7 +452,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (109 tests)
+npm test                   # everything (115 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 

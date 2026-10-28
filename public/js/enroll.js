@@ -1,5 +1,6 @@
 (async function () {
-    const QUESTION_COUNT = 3;
+    // Set from the enrollment status below; declared here so nothing can hit it in its dead zone
+    let QUESTION_COUNT = 3;
     // Declared before the first goToStep(2) call: touching a later `let` there throws silently
     let replacing = false;
 
@@ -18,6 +19,8 @@
             api('GET', '/api/enrollment/security-questions'),
         ]);
         status = statusRes.data;
+        // How many questions this user has to set now; an older enrollment may still hold more
+        QUESTION_COUNT = Number(status.questionCount) || QUESTION_COUNT;
         questions = questionsRes.data;
         myQuestions = mineRes.data;
     } catch (err) {

@@ -85,14 +85,16 @@ async function login(api, username, password) {
     return res.body.data;
 }
 
-const DEFAULT_ANSWERS = ['Rex', 'Springfield', 'Smith'];
+const DEFAULT_ANSWERS = ['Rex', 'Springfield', 'Smith', 'Blue', 'Pasta'];
 
 // Fully enrolls a user (security questions + TOTP) and returns what the tests need.
+// The number of questions follows the portal setting, so tests work at any configured count.
 async function enrollUser(api, username, password) {
     const { token } = await login(api, username, password);
 
+    const status = (await api('GET', '/api/enrollment/status', undefined, token)).body.data;
     const questions = (await api('GET', '/api/enrollment/questions', undefined, token)).body.data;
-    const selected = questions.slice(0, 3);
+    const selected = questions.slice(0, status.questionCount);
     const answers = selected.map((q, i) => ({ questionId: q.id, answer: DEFAULT_ANSWERS[i] }));
 
     const sq = await api('POST', '/api/enrollment/security-questions', { answers }, token);

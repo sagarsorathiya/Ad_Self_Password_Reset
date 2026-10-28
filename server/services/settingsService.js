@@ -75,6 +75,10 @@ const FIELDS = {
         deserialize: (v) => parseDays(v, 'Days before expiry'),
     },
     'reminders.hour': { group: 'reminders', name: 'hour', label: 'Daily run hour', parse: (v) => parseInteger(v, 'Daily run hour', 0, 23) },
+    'security.questionCount': {
+        group: 'security', name: 'questionCount', label: 'Security questions per user',
+        parse: (v) => parseInteger(v, 'Security questions per user', 2, 5),
+    },
     'reminders.source': {
         group: 'reminders', name: 'source', label: 'Expiry source',
         parse: (v) => {
@@ -90,6 +94,7 @@ function defaults() {
     return {
         mail: { ...config.mail },
         reminders: { ...config.reminders, days: [...config.reminders.days] },
+        security: { ...config.security },
         // Keys whose value comes from the database rather than .env
         overrides: [],
     };
@@ -178,6 +183,7 @@ function previewMerge(writes) {
     const merged = {
         mail: { ...snapshot.mail },
         reminders: { ...snapshot.reminders },
+        security: { ...snapshot.security },
     };
     for (const [key, value] of writes) {
         const field = FIELDS[key];
@@ -206,6 +212,7 @@ async function describe() {
             portalUrl: settings.mail.portalUrl,
         },
         reminders: { ...settings.reminders, days: [...settings.reminders.days] },
+        security: { ...settings.security },
         // From .env, shown read-only: these are not editable in the panel
         envDefaults: {
             host: config.mail.host,
@@ -213,6 +220,7 @@ async function describe() {
             from: config.mail.from,
             days: [...config.reminders.days],
             hour: config.reminders.hour,
+            questionCount: config.security.questionCount,
             source: config.reminders.source,
             enabled: config.reminders.enabled,
         },

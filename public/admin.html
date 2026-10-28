@@ -127,8 +127,28 @@
 
             <!-- Security questions -->
             <section id="tab-questions" class="hidden">
+                <div class="card card-full mb-6">
+                    <h2 class="settings-title">Questions per user</h2>
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="sqCount">Questions each user sets and answers</label>
+                            <select class="form-select" id="sqCount">
+                                <option value="2">2 questions</option>
+                                <option value="3">3 questions</option>
+                                <option value="4">4 questions</option>
+                                <option value="5">5 questions</option>
+                            </select>
+                            <div class="form-hint">Applies to new enrollments immediately. Users who already set more
+                                keep them, and are still asked all of them at reset, until they save their questions again.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="sqCountSaveBtn">Save</label>
+                            <button type="button" class="btn btn-primary" id="sqCountSaveBtn">Save Count</button>
+                        </div>
+                    </div>
+                </div>
                 <div class="toolbar">
-                    <p class="text-sm text-muted">Users choose 3 of the active questions during enrollment. Deactivating a question does not affect users who already selected it.</p>
+                    <p class="text-sm text-muted" id="questionsIntro">Users choose from the active questions during enrollment. Deactivating a question does not affect users who already selected it.</p>
                     <button type="button" class="btn btn-primary btn-sm" id="addQuestionBtn">+ Add Question</button>
                 </div>
                 <div class="table-container">
@@ -287,6 +307,6 @@
     </div>
 
     <script src="/js/app.js"></script>
-    <script src="/js/admin.js?v=20261027b"></script>
+    <script src="/js/admin.js?v=20261028"></script>
 </body>
 </html>

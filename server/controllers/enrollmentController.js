@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const db = require('../config/db');
+const settingsService = require('../services/settingsService');
 const totpService = require('../services/totpService');
 const ldapService = require('../services/ldapService');
 const { logAudit } = require('./authController');
@@ -78,7 +79,8 @@ async function getMyQuestions(req, res) {
 
 /**
  * POST /api/enrollment/security-questions
- * Submit 3 selected security questions with answers.
+ * Submit the configured number of selected security questions with answers.
+ * Users enrolled under an older, larger count keep their extra answers until they save here again.
  * Body: { answers: [{ questionId: 1, answer: "..." }, ...] }
  */
 async function submitSecurityQuestions(req, res) {
@@ -87,20 +89,22 @@ async function submitSecurityQuestions(req, res) {
     try {
         const { answers } = req.body;
 
-        if (!answers || !Array.isArray(answers) || answers.length !== 3) {
+        const required = settingsService.current().security.questionCount;
+
+        if (!answers || !Array.isArray(answers) || answers.length !== required) {
             return res.status(400).json({
                 success: false,
-                message: 'Exactly 3 security questions with answers are required.',
+                message: `Exactly ${required} security questions with answers are required.`,
             });
         }
 
         // Validate all questions exist and answers are non-empty
         const questionIds = answers.map(a => a.questionId);
         const uniqueIds = new Set(questionIds);
-        if (uniqueIds.size !== 3) {
+        if (uniqueIds.size !== required) {
             return res.status(400).json({
                 success: false,
-                message: 'Please select 3 different questions.',
+                message: `Please select ${required} different questions.`,
             });
         }
 
@@ -136,7 +140,7 @@ async function submitSecurityQuestions(req, res) {
             [questionIds, [...existingHashes.keys()]]
         );
 
-        if (questionCheck.rows.length !== 3) {
+        if (questionCheck.rows.length !== required) {
             return res.status(400).json({
                 success: false,
                 message: 'One or more selected questions are invalid.',
@@ -338,6 +342,8 @@ async function getStatus(req, res) {
                 isEnrolled: user.is_enrolled,
                 totpEnabled: user.totp_enabled,
                 securityQuestionsSet: user.security_questions_set,
+                // How many questions this user must set now; an older enrollment may still hold more
+                questionCount: settingsService.current().security.questionCount,
                 steps: {
                     securityQuestions: user.security_questions_set ? 'complete' : 'pending',
                     totp: user.totp_enabled ? 'complete' : 'pending',
