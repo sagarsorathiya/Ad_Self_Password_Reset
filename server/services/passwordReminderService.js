@@ -14,7 +14,9 @@ const { logAudit } = require('../controllers/authController');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UAC_ACCOUNT_DISABLED = 2;
-const CHECK_INTERVAL_MS = 60 * 60 * 1000;
+// Checked every 5 minutes: an hourly tick is aligned to the last restart, so a pass set for 11:00 could
+// start as late as 11:59 (seen in production 2026-10-28, when the hour was changed in the admin panel).
+const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const NO_REQUEST = { headers: {} };
 
 // Most urgent stage reached: 10 days left with stages 14,7,6,5,4,3,2,1 → 14; 5 days left → 5
