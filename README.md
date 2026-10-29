@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 135 automated tests (`node:test`)
+- Tests: 136 automated tests (`node:test`)
 
 ---
 
@@ -425,7 +425,7 @@ Members of `AD_ADMIN_GROUP` and portal admins see **Admin** in the navigation ba
 - **Stats:** total, enrolled, pending and locked users (users appear once they've signed in for the first time).
 - **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers, authenticator and mobile number, which you'd use for a lost phone. They must enroll again at their next sign-in.
 - **Portal admins:** **+ Add Admin** grants admin rights by AD username (the account must exist and be enabled; it doesn't need to have signed in yet). **Make Admin** / **Remove Admin** on a user row does the same for existing users, and the *Portal Admins* filter lists them. Changes apply immediately, without signing in again, and are audited (*Admin granted*, *Admin removed*). You can't remove your own rights, and locking a portal admin also blocks their admin access. Members of `AD_ADMIN_GROUP` are always admins and can't be removed here.
-- **Audit Log:** filter by username (partial match), action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), every mail/reminder settings change, test mail and manual reminder run, including failures.
+- **Audit Log:** filter by username (partial match), action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), every mail/reminder settings change, test mail and manual reminder run, including failures. **Every one-time code that goes out is logged too** — *Setup code sent by SMS* during enrollment and *Reset code sent by SMS* during a reset — with the masked number it went to and the gateway's own reply, whether or not the send succeeded. That reply carries the provider's message id, which is what lets you trace a message the user says never arrived. Long entries are shortened to one line; click one to see the whole thing.
 - **Security Questions:** set how many questions each user must answer (2 to 5, default 3) and manage the list: add, edit, reorder, deactivate. The count applies to new enrollments at once; a user who already set more keeps them and is still asked all of them when resetting, until they save their questions again - then they move to the new count. Deactivating a question hides it from new enrollments; existing users keep it.
 - **Verification:** which second factor users can set up (authenticator app, SMS, or both; at least one must stay on) and the SMS gateway (URL, method, body template, headers, sender ID, dialling code, message text). Saved values override `.env` immediately, without a restart. The request headers hold the API key: they are stored encrypted and shown only as `********` — leave the field untouched to keep them. **Send Test SMS** sends one message through the saved settings and shows the gateway's reply. Switching a factor off leaves existing users' enrollment in place, but they can no longer use that factor to reset their password. Audited as *Mail/reminder settings changed* and *Test SMS*.
 - **Mail & Reminders:** the SMTP relay (host, port, encryption, optional login, From address) and the expiry reminders (on/off, the day stages, the daily run hour, and which domain's expiry is used). Saved values are stored in the portal database and **override `.env`** from the moment you save them; they take effect immediately, without restarting the portal. An empty SMTP host switches all portal mail off. The SMTP password is stored encrypted and never shown again — leave the field untouched to keep it. **Send Test Mail** sends one message through the current settings. **Preview Reminders** checks the directory and sends nothing: it reports how many accounts were scanned, how many have an expiring password, how many are inside the reminder window, who was already mailed for their current stage (with the time) and who is due now, plus a per-stage table and the reasons any account was skipped. **Send Reminders Now** mails everyone due immediately (a stage already mailed for the same expiry date is never repeated). All three are audited (*Mail/reminder settings changed*, *Test mail*, *Manual reminder run*).
@@ -510,7 +510,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (135 tests)
+npm test                   # everything (136 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
