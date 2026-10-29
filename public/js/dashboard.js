@@ -11,6 +11,10 @@
 
     setBadge('sqBadge', user.securityQuestionsSet, 'Configured', 'Not set');
     setBadge('totpBadge', user.totpEnabled, 'Enabled', 'Not set');
+    // The SMS row only appears for users who set it up; the enrollment page shows whether it is on offer
+    setBadge('smsBadge', user.smsEnabled, 'Enabled', 'Not set');
+    document.getElementById('smsRow').classList.toggle('hidden', !user.smsEnabled);
+    document.getElementById('totpRow').classList.toggle('hidden', !user.totpEnabled && user.smsEnabled);
     setBadge('enrolledBadge', user.isEnrolled, 'Enrolled', 'Incomplete');
 
     if (user.isAdmin) document.getElementById('adminLink').classList.remove('hidden');

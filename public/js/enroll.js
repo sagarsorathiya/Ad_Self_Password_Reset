@@ -3,6 +3,10 @@
     let QUESTION_COUNT = 3;
     // Declared before the first goToStep(2) call: touching a later `let` there throws silently
     let replacing = false;
+    // Which second factors the administrator allows, and the SMS state of this user
+    let FACTORS = { totp: true, sms: false };
+    let smsReplacing = false;
+    let smsResendTimer = null;
 
     const user = await loadCurrentUser();
     if (!user) return;
@@ -21,6 +25,7 @@
         status = statusRes.data;
         // How many questions this user has to set now; an older enrollment may still hold more
         QUESTION_COUNT = Number(status.questionCount) || QUESTION_COUNT;
+        FACTORS = status.factors || FACTORS;
         questions = questionsRes.data;
         myQuestions = mineRes.data;
     } catch (err) {
@@ -40,6 +45,8 @@
     document.querySelectorAll('.reauth-group').forEach((g) => initPasswordToggles(g));
     initSecurityQuestions();
     initTotp();
+    initSms();
+    applyFactorLabels();
 
     if (manageMode) {
         document.getElementById('pageTitle').textContent = 'Security Settings';
@@ -66,8 +73,59 @@
         });
         connectors.forEach((el, idx) => el.classList.toggle('active', idx + 1 < n));
 
-        if (n === 2) startTotpSetup(false);
+        if (n === 2) startSecondFactor();
         if (n === 3) finishEnrollment();
+    }
+
+    // ---- Second factor: authenticator app, SMS, or a choice between them ----
+
+    // True once the user holds a second factor the administrator still allows
+    function hasSecondFactor() {
+        return Boolean((FACTORS.totp && status.totpEnabled) || (FACTORS.sms && status.smsEnabled));
+    }
+
+    // The wizard asks only when the administrator allows both; with one factor it goes straight into it
+    function startSecondFactor() {
+        const choice = document.getElementById('factorChoice');
+        if (FACTORS.totp && FACTORS.sms) {
+            choice.classList.remove('hidden');
+            document.getElementById('totpSetup').classList.add('hidden');
+            document.getElementById('smsSetup').classList.add('hidden');
+            return;
+        }
+        choice.classList.add('hidden');
+        if (FACTORS.sms) showSmsSetup(false);
+        else showTotpSetup(false);
+    }
+
+    function showTotpSetup(isReplacement, currentPassword) {
+        document.getElementById('factorChoice').classList.add('hidden');
+        document.getElementById('smsSetup').classList.add('hidden');
+        document.getElementById('totpSetup').classList.remove('hidden');
+        return startTotpSetup(isReplacement, currentPassword);
+    }
+
+    function showSmsSetup(isReplacement) {
+        document.getElementById('factorChoice').classList.add('hidden');
+        document.getElementById('totpSetup').classList.add('hidden');
+        document.getElementById('smsSetup').classList.remove('hidden');
+        resetSmsForms(isReplacement);
+    }
+
+    // The step label and the "all set" wording depend on which factors exist
+    function applyFactorLabels() {
+        const label = document.getElementById('step2Label');
+        if (FACTORS.totp && FACTORS.sms) label.textContent = 'Verification';
+        else if (FACTORS.sms) label.textContent = 'Text Message';
+        document.querySelectorAll('#factorChoice .method-card').forEach((card) => {
+            card.addEventListener('click', () => {
+                if (card.dataset.factor === 'sms') showSmsSetup(false);
+                else showTotpSetup(false);
+            });
+        });
+        const back = document.getElementById('smsBackBtn');
+        back.classList.toggle('hidden', manageMode || !(FACTORS.totp && FACTORS.sms));
+        back.addEventListener('click', startSecondFactor);
     }
 
     // ---- Management view (enrolled) ----
@@ -80,7 +138,61 @@
             li.textContent = q.questionText;
             list.appendChild(li);
         });
+        renderSmsCard();
+        // Hidden when the administrator has turned authenticator apps off and this user never set one up
+        document.getElementById('totpManageCard').classList.toggle('hidden', !FACTORS.totp && !status.totpEnabled);
+        const totpBadge = document.getElementById('totpManageBadge');
+        totpBadge.textContent = status.totpEnabled ? 'Active' : 'Not set up';
+        totpBadge.className = `badge ${status.totpEnabled ? 'badge-success' : 'badge-warning'}`;
+        document.getElementById('replaceTotpBtn').textContent = status.totpEnabled
+            ? 'Replace authenticator (new device)'
+            : 'Set up an authenticator app';
+        document.getElementById('totpReauthGroup').classList.toggle('hidden', !status.totpEnabled);
         showSection('manageView');
+    }
+
+    // The SMS card doubles as "set it up" and "change the number", so an enrolled user can add the
+    // second factor later without going through the wizard again.
+    function renderSmsCard() {
+        const card = document.getElementById('smsManageCard');
+        card.classList.toggle('hidden', !FACTORS.sms);
+        if (!FACTORS.sms) return;
+
+        const badge = document.getElementById('smsManageBadge');
+        badge.textContent = status.smsEnabled ? 'Active' : 'Not set up';
+        badge.className = `badge ${status.smsEnabled ? 'badge-success' : 'badge-warning'}`;
+
+        setSmsCardText(status.mobile?.masked || '');
+
+        // Re-authentication is only required once a number of your own has been verified
+        document.getElementById('smsReauthGroup').classList.toggle('hidden', !status.smsEnabled);
+        document.getElementById('smsManageBtn').textContent = status.smsEnabled
+            ? 'Change mobile number'
+            : 'Send a code to this number';
+    }
+
+    /**
+     * Write the card's sentence with the number in bold. Rebuilt element by element every time:
+     * setting textContent on the paragraph would delete any <strong> inside it, so a second render
+     * found nothing to write to ("Cannot set properties of null", production 2026-10-29).
+     */
+    function setSmsCardText(known) {
+        const target = document.getElementById('smsManageText');
+        target.textContent = '';
+
+        if (!known) {
+            target.textContent = 'Add a mobile number to receive one-time codes by text message.';
+            return;
+        }
+
+        const number = document.createElement('strong');
+        number.textContent = known;
+        if (status.smsEnabled) {
+            target.append('Codes are sent to ', number, '.');
+        } else {
+            target.append('We can send codes to ', number, ', the number on your account. '
+                + 'Verify it to switch this on.');
+        }
     }
 
     document.getElementById('updateQuestionsBtn').addEventListener('click', () => {
@@ -96,9 +208,34 @@
             pwInput.focus();
             return;
         }
-        const ok = await startTotpSetup(true, pwInput.value);
+        showSection('step2');
+        const ok = await showTotpSetup(true, pwInput.value);
         pwInput.value = '';
-        if (ok) showSection('step2');
+        if (!ok) showOverview();
+    });
+
+    document.getElementById('smsManageBtn').addEventListener('click', async () => {
+        const pwInput = document.getElementById('smsCurrentPassword');
+        const mobileInput = document.getElementById('smsManageMobile');
+        setFieldError(pwInput, '');
+        setFieldError(mobileInput, '');
+
+        // Changing a verified number is a factor change: prove the password first, like replacing a device
+        if (status.smsEnabled && !pwInput.value) {
+            setFieldError(pwInput, 'Enter your current password to continue.');
+            pwInput.focus();
+            return;
+        }
+
+        showSection('step2');
+        showSmsSetup(status.smsEnabled);
+        const ok = await sendSmsCode({
+            mobile: mobileInput.value.trim() || undefined,
+            currentPassword: pwInput.value || undefined,
+        });
+        pwInput.value = '';
+        mobileInput.value = '';
+        if (!ok) showOverview();
     });
 
     // ---- Security questions ----
@@ -208,7 +345,7 @@
                 }));
                 showToast('Security questions saved.', 'success');
                 if (manageMode) showOverview();
-                else goToStep(status.totpEnabled ? 3 : 2);
+                else goToStep(hasSecondFactor() ? 3 : 2);
             } catch (err) {
                 if (err.code === 'REAUTH_FAILED' || err.code === 'REAUTH_REQUIRED') {
                     setFieldError(pwInput, err.message);
@@ -340,6 +477,164 @@
         } finally {
             hideOverlay();
         }
+    }
+
+    // ---- Text message (SMS) ----
+
+    function initSms() {
+        const mobileForm = document.getElementById('smsMobileForm');
+        const codeForm = document.getElementById('smsForm');
+        const codeInput = document.getElementById('smsCode');
+
+        document.getElementById('smsOtherNumberBtn').addEventListener('click', () => {
+            document.getElementById('smsDirectoryHint').style.display = 'none';
+            document.getElementById('smsMobileGroup').style.display = '';
+            document.getElementById('smsMobile').focus();
+        });
+
+        codeInput.addEventListener('input', () => {
+            codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6);
+        });
+
+        mobileForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const input = document.getElementById('smsMobile');
+            const visible = document.getElementById('smsMobileGroup').style.display !== 'none';
+            clearFieldErrors(mobileForm);
+            if (visible && !input.value.trim()) {
+                setFieldError(input, 'Enter your mobile number, including the country code.');
+                return;
+            }
+            const btn = document.getElementById('smsSendBtn');
+            setButtonLoading(btn, true, 'Sending...');
+            await sendSmsCode({ mobile: visible ? input.value.trim() : undefined });
+            setButtonLoading(btn, false);
+        });
+
+        document.getElementById('smsResendBtn').addEventListener('click', async () => {
+            // The number is already staged on the server, so a resend needs no input
+            await sendSmsCode({ resend: true });
+        });
+
+        codeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            clearFieldErrors(codeForm);
+
+            const code = codeInput.value;
+            if (!/^\d{6}$/.test(code)) {
+                setFieldError(codeInput, 'Enter the 6-digit code from the text message.');
+                return;
+            }
+
+            const btn = document.getElementById('smsVerifyBtn');
+            setButtonLoading(btn, true, 'Verifying...');
+            try {
+                const res = await api('POST', '/api/enrollment/sms/verify', { code });
+                status.smsEnabled = true;
+                stopResendCountdown();
+                showToast(res.message || 'Mobile number verified.', 'success');
+                const fresh = await api('GET', '/api/enrollment/status').catch(() => null);
+                if (fresh) status = fresh.data;
+                if (manageMode) showOverview();
+                else goToStep(3);
+            } catch (err) {
+                setFieldError(codeInput, err.message);
+                codeInput.select();
+            } finally {
+                setButtonLoading(btn, false);
+            }
+        });
+    }
+
+    // Back to "which number?" before a code has been sent
+    function resetSmsForms(isReplacement) {
+        smsReplacing = isReplacement;
+        stopResendCountdown();
+        document.getElementById('smsReplaceAlert').classList.toggle('hidden', !isReplacement);
+        document.getElementById('smsForm').classList.add('hidden');
+        document.getElementById('smsMobileForm').classList.remove('hidden');
+        document.getElementById('smsCode').value = '';
+        document.getElementById('smsMobile').value = '';
+        clearFieldErrors(document.getElementById('smsMobileForm'));
+        clearFieldErrors(document.getElementById('smsForm'));
+
+        // A number already on the account is offered first; only users without one have to type it
+        const known = !isReplacement && status.mobile?.masked;
+        document.getElementById('smsKnownNumber').textContent = known || '';
+        document.getElementById('smsDirectoryHint').style.display = known ? '' : 'none';
+        document.getElementById('smsMobileGroup').style.display = known ? 'none' : '';
+    }
+
+    /**
+     * Ask the server to text a code.
+     * @returns {Promise<boolean>} true while the user should stay in the SMS section (code sent, or a
+     *   number is still needed), false when the attempt failed and the caller should go back.
+     */
+    async function sendSmsCode({ mobile, currentPassword, resend } = {}) {
+        const body = {};
+        if (mobile) body.mobile = mobile;
+        if (currentPassword) body.currentPassword = currentPassword;
+
+        try {
+            const { data } = await api('POST', '/api/enrollment/sms/setup', body);
+            document.getElementById('smsSentTo').textContent = data.mobileMasked;
+            document.getElementById('smsMobileForm').classList.add('hidden');
+            document.getElementById('smsForm').classList.remove('hidden');
+            startResendCountdown(data.resendAfter);
+            if (resend) showToast(`New code sent to ${data.mobileMasked}.`, 'success');
+            document.getElementById('smsCode').focus();
+            return true;
+        } catch (err) {
+            if (err.code === 'MOBILE_REQUIRED') {
+                // Expected for everyone without a number in the directory: ask for one
+                document.getElementById('smsDirectoryHint').style.display = 'none';
+                document.getElementById('smsMobileGroup').style.display = '';
+                document.getElementById('smsMobileForm').classList.remove('hidden');
+                document.getElementById('smsForm').classList.add('hidden');
+                document.getElementById('smsMobile').focus();
+                return true;
+            }
+            if (err.code === 'MOBILE_INVALID') {
+                setFieldError(document.getElementById('smsMobile'), err.message);
+                return true;
+            }
+            if (err.code === 'SMS_COOLDOWN') {
+                startResendCountdown(err.data?.resendAfter || 60);
+                showToast(err.message, 'warning');
+                return true;
+            }
+            if (err.code === 'REAUTH_FAILED' || err.code === 'REAUTH_REQUIRED') {
+                setFieldError(document.getElementById('smsCurrentPassword'), err.message);
+                return false;
+            }
+            showToast(err.message, 'error');
+            return false;
+        }
+    }
+
+    function startResendCountdown(seconds) {
+        const btn = document.getElementById('smsResendBtn');
+        let left = Number(seconds) || 0;
+        stopResendCountdown();
+        const tick = () => {
+            if (left <= 0) {
+                stopResendCountdown();
+                return;
+            }
+            btn.disabled = true;
+            btn.textContent = `Resend code in ${left}s`;
+            left -= 1;
+        };
+        tick();
+        smsResendTimer = setInterval(tick, 1000);
+    }
+
+    function stopResendCountdown() {
+        clearInterval(smsResendTimer);
+        smsResendTimer = null;
+        const btn = document.getElementById('smsResendBtn');
+        btn.disabled = false;
+        btn.textContent = 'Resend code';
     }
 
     // ---- Done ----

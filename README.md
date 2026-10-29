@@ -1,10 +1,10 @@
 # AD Self-Service Password Reset Portal
 
-An **intranet** web portal that lets Active Directory users change their password and reset a forgotten password on their own. Users prove who they are with **security questions** or an **authenticator app (TOTP)**. Help-desk staff get an admin panel for enrollment tracking, account locking and an audit trail.
+An **intranet** web portal that lets Active Directory users change their password and reset a forgotten password on their own. Users prove who they are with **security questions** plus a one-time code from an **authenticator app (TOTP)** or an **SMS** to their mobile number. Help-desk staff get an admin panel for enrollment tracking, account locking and an audit trail.
 
 - Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 99 automated tests (`node:test`)
+- Tests: 132 automated tests (`node:test`)
 
 ---
 
@@ -32,13 +32,14 @@ An **intranet** web portal that lets Active Directory users change their passwor
 | Area | Details |
 |---|---|
 | Sign-in | AD credentials checked by an LDAP bind. JWT access token (15 min) plus refresh token (7 days). |
-| Enrollment | 3 security questions (answers hashed with bcrypt) and an authenticator app (QR code or manual key). |
+| Enrollment | 3 security questions (answers hashed with bcrypt) plus a second factor: an authenticator app (QR code or manual key) and/or an SMS code. |
 | Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes. |
 | Change password | For signed-in users who have completed enrollment. The current password is checked against AD. |
 | Second domain (optional) | Every change and reset also sets the same password in a second domain (same username), e.g. a separate mail domain. See §5.1. |
 | Mail (optional) | Security alert after every password change or reset (time, IP address, browser, method). Daily reminders before the password expires. See §5.2. |
 | Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, portal admins, audit log viewer, security question management, password exception list (blocked words), mail and expiry-reminder settings with test mail and manual run. |
-| Security | Rate limiting, account lockout, TOTP replay protection, refresh-token revocation, audit log, CSP/Helmet. |
+| SMS codes (optional) | A 6-digit code texted through any HTTP SMS gateway. The number comes from the directory's `mobile` attribute; users without one enter theirs during enrollment. See §5.3. |
+| Security | Rate limiting, account lockout, TOTP replay protection, single-use SMS codes with a resend cooldown, refresh-token revocation, audit log, CSP/Helmet. |
 
 ## 2. Architecture
 
@@ -123,7 +124,14 @@ All settings live in `.env`, which is git-ignored.
 | `TOTP_ISSUER` | `AD Password Reset Portal` | Name shown in authenticator apps |
 | `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | `900000` / `5` | Limit for login, reset and verify, per IP and username |
 | `RATE_LIMIT_GENERAL_MAX` | `100` | Limit for all API calls per IP in each window. On an intranet behind NAT or a shared proxy, raise it (e.g. `1000`). |
-| `RESET_POLICY` | `both` | `both`: security questions **and** authenticator code (recommended). `totp_only`: authenticator only. `either`: one of the two. |
+| `FACTOR_TOTP` / `FACTOR_SMS` | `true` / `false` | Which second factors users can set up; at least one must stay on. Admin → Verification overrides these. |
+| `SMS_API_URL` | – | SMS gateway endpoint; may contain `{mobile}`, `{mobile_plain}`, `{message}`, `{otp}`, `{sender}`. Required when `FACTOR_SMS=true`. |
+| `SMS_API_METHOD` / `SMS_BODY_TYPE` / `SMS_BODY_TEMPLATE` | `GET` / `json` / – | How the request is sent. A POST needs a body template unless the body type is `none`. |
+| `SMS_HEADERS` | – | Extra request headers, one `Name: value` per line. Put the API key here; it is stored encrypted when saved in the admin panel. |
+| `SMS_SENDER_ID` / `SMS_COUNTRY_CODE` | – | Sender ID for `{sender}`; dialling code (e.g. `+91`) added to numbers typed without one. |
+| `SMS_SUCCESS_TEXT` | – | For gateways that answer HTTP 200 even on failure: the reply must contain this text. |
+| `SMS_MESSAGE_TEMPLATE` | see `.env.example` | Message text; must contain `{otp}`. |
+| `RESET_POLICY` | `both` | `both`: security questions **and** a one-time code (recommended). `totp_only`: a one-time code only. `either`: one of the two. |
 | `HTTP_REDIRECT_PORT` | – | Optional plain-HTTP port that only redirects to HTTPS (e.g. `80` with `PORT=443`) |
 | `AD_ALLOW_PRIVILEGED_BIND` | `false` | Production refuses to start if `AD_BIND_DN` or `AD2_BIND_DN` is privileged (adminCount=1). Override only; it applies to both accounts unless `AD2_ALLOW_PRIVILEGED_BIND` is set. |
 | `SMTP_HOST` / `SMTP_PORT` | – / `25` | SMTP relay for alerts and reminders. Empty = no mail is sent. |
@@ -272,6 +280,46 @@ The dry run lists each user who is due (username, days left, address) and a summ
 
 The service account only needs to read users (the default for domain users). Run `npm run db:init` once after upgrading, to create the `password_reminders` table.
 
+### 5.3 SMS one-time codes (optional)
+
+Instead of (or alongside) an authenticator app, users can receive a 6-digit code by text message. Any SMS gateway with an HTTP API works: you describe the request, the portal fills in the placeholders.
+
+1. Run `npm run db:init` once, to add the SMS columns and the `sms_codes` table.
+2. Set up the gateway in **Admin → Verification**, or in `.env` (`SMS_API_URL`, `SMS_API_METHOD`, `SMS_BODY_TYPE`, `SMS_BODY_TEMPLATE`, `SMS_HEADERS`, `SMS_SENDER_ID`, `SMS_COUNTRY_CODE`, `SMS_MESSAGE_TEMPLATE`). Values saved in the admin panel override `.env` and apply immediately.
+3. Send a test message from **Admin → Verification → Send Test SMS**.
+4. Switch the factor on: `FACTOR_SMS=true`, or *SMS one-time code → Available to users* in the panel. `FACTOR_TOTP=false` turns authenticator apps off; at least one factor must stay on.
+
+Placeholders, each escaped for where it appears (so a number or message can never break the request):
+
+| Placeholder | Value |
+|---|---|
+| `{mobile}` | E.164 number with the leading `+`, e.g. `+919876543210` |
+| `{mobile_plain}` | the same number without the `+` |
+| `{message}` | the finished message text |
+| `{otp}` | just the 6-digit code |
+| `{sender}` | `SMS_SENDER_ID` |
+| `{portal}` / `{minutes}` | portal name / how long the code is valid (message template only) |
+
+```ini
+# GET gateway
+SMS_API_URL=https://sms.example.com/api/v1/send?to={mobile_plain}&sender={sender}&text={message}
+SMS_HEADERS=Authorization: Bearer your-api-key
+
+# POST gateway with a JSON body
+SMS_API_URL=https://sms.example.com/api/v1/send
+SMS_API_METHOD=POST
+SMS_BODY_TYPE=json
+SMS_BODY_TEMPLATE={"to": "{mobile}", "text": "{message}", "from": "{sender}"}
+```
+
+**Where the number comes from.** The portal reads the `mobile` attribute of the user's AD account (no extra permission needed: the service account already reads users). A user without one is asked for a number during enrollment; that number is stored **encrypted in the portal database** and is never written back to Active Directory. Either way the number is only used once a code sent to it has been entered, and a verified portal number takes precedence over a later AD entry.
+
+**Operator-registered templates.** Some countries only deliver messages that match a template registered in advance (DLT in India). Put the registered text in `SMS_MESSAGE_TEMPLATE` with `{otp}` where the code belongs; *Send Test SMS* sends that same template with a throwaway code, so a passing test means real codes will arrive too.
+
+**Confirming a send.** Leave `SMS_SUCCESS_TEXT` empty at first, send one test, and read the gateway's reply from the audit log (*Test SMS* records it on success as well as failure). Then set it to something that appears only when the gateway accepted the message. Prefer a stable key name (e.g. `uniqueid`) over an exact phrase: if the marker stops matching, delivered codes are reported as failures and discarded after the user's phone has already buzzed.
+
+**Limits.** A code is 6 digits, valid for 10 minutes, usable once, and dies after 5 wrong guesses. A new code can be requested every 60 seconds, on top of the per-IP/username rate limit. Codes are stored as bcrypt hashes, so the database never holds a usable code. Changing a verified number requires the current Windows password, like replacing an authenticator.
+
 ## 6. PostgreSQL setup
 
 Create a dedicated low-privilege user instead of using `postgres`:
@@ -360,12 +408,13 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 1. **First sign-in:** open the portal and sign in with your domain username (just the username, not your email address or `DOMAIN\username`) and password. You're taken straight to enrollment.
 2. **Enroll:**
    - Step 1: pick 3 different questions and type answers (not case-sensitive).
-   - Step 2: scan the QR code with Google Authenticator, Microsoft Authenticator or a compatible app (if none is installed, download one from the Google Play Store or the App Store), then type the 6-digit code.
-3. **Forgot your password:** on the sign-in page click *Reset it here* and enter your username. With the default policy (`RESET_POLICY=both`), answer your security questions, **then** enter the 6-digit code from your authenticator app. Then choose a new password within 10 minutes. If you've lost your phone, contact the help desk; they can reset your enrollment.
-4. **Change password:** after signing in, go to *Change Password*. It appears only once you've finished enrollment (security questions and authenticator app). You're signed out afterwards and sign in again with the new password.
+   - Step 2: set up your one-time code. For an **authenticator app**, scan the QR code with Google Authenticator, Microsoft Authenticator or a compatible app (if none is installed, download one from the Google Play Store or the App Store), then type the 6-digit code. For **text messages**, confirm the mobile number shown (or type one, if we don't have yours) and enter the code we text you. If your organization offers both, pick whichever you prefer.
+3. **Forgot your password:** on the sign-in page click *Reset it here* and enter your username. With the default policy (`RESET_POLICY=both`), answer your security questions, **then** enter the 6-digit code from your authenticator app or the one we text you. Then choose a new password within 10 minutes. If you've lost your phone, contact the help desk; they can reset your enrollment.
+4. **Change password:** after signing in, go to *Change Password*. It appears only once you've finished enrollment (security questions and one one-time code method). You're signed out afterwards and sign in again with the new password.
 5. **Security Settings** (shown in the navigation bar once you've enrolled):
    - **Update questions or answers:** your current questions are pre-selected. Answers are stored as one-way hashes and can't be shown to anyone, so leave an answer blank to keep it, or type a new one.
    - **Replace authenticator (new device):** scan the new QR code and enter a code from the new device. Your old device keeps working until the new one is verified, then stops working.
+   - **Text message (SMS):** shows the number codes go to, and lets you switch to a new one. Codes keep going to the old number until you enter a code sent to the new one. Changing it asks for your current Windows password.
 6. **Emails** (if your organization turned them on): after every password change or reset you get an email with the time, IP address and browser. If you didn't make the change, contact IT immediately. Before your password expires you get reminders (by default 14, 7, 3 and 1 days before). Change your password in the portal when you get one.
 7. **Password rules:** at least 8 characters, with 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username, and your domain policy may block recently used passwords.
 
@@ -373,10 +422,11 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 
 Members of `AD_ADMIN_GROUP` and portal admins see **Admin** in the navigation bar.
 - **Stats:** total, enrolled, pending and locked users (users appear once they've signed in for the first time).
-- **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers and authenticator, which you'd use for a lost phone. They must enroll again at their next sign-in.
+- **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers, authenticator and mobile number, which you'd use for a lost phone. They must enroll again at their next sign-in.
 - **Portal admins:** **+ Add Admin** grants admin rights by AD username (the account must exist and be enabled; it doesn't need to have signed in yet). **Make Admin** / **Remove Admin** on a user row does the same for existing users, and the *Portal Admins* filter lists them. Changes apply immediately, without signing in again, and are audited (*Admin granted*, *Admin removed*). You can't remove your own rights, and locking a portal admin also blocks their admin access. Members of `AD_ADMIN_GROUP` are always admins and can't be removed here.
 - **Audit Log:** filter by username (partial match), action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), every mail/reminder settings change, test mail and manual reminder run, including failures.
 - **Security Questions:** set how many questions each user must answer (2 to 5, default 3) and manage the list: add, edit, reorder, deactivate. The count applies to new enrollments at once; a user who already set more keeps them and is still asked all of them when resetting, until they save their questions again - then they move to the new count. Deactivating a question hides it from new enrollments; existing users keep it.
+- **Verification:** which second factor users can set up (authenticator app, SMS, or both; at least one must stay on) and the SMS gateway (URL, method, body template, headers, sender ID, dialling code, message text). Saved values override `.env` immediately, without a restart. The request headers hold the API key: they are stored encrypted and shown only as `********` — leave the field untouched to keep them. **Send Test SMS** sends one message through the saved settings and shows the gateway's reply. Switching a factor off leaves existing users' enrollment in place, but they can no longer use that factor to reset their password. Audited as *Mail/reminder settings changed* and *Test SMS*.
 - **Mail & Reminders:** the SMTP relay (host, port, encryption, optional login, From address) and the expiry reminders (on/off, the day stages, the daily run hour, and which domain's expiry is used). Saved values are stored in the portal database and **override `.env`** from the moment you save them; they take effect immediately, without restarting the portal. An empty SMTP host switches all portal mail off. The SMTP password is stored encrypted and never shown again — leave the field untouched to keep it. **Send Test Mail** sends one message through the current settings. **Preview Reminders** checks the directory and sends nothing: it reports how many accounts were scanned, how many have an expiring password, how many are inside the reminder window, who was already mailed for their current stage (with the time) and who is due now, plus a per-stage table and the reasons any account was skipped. **Send Reminders Now** mails everyone due immediately (a stage already mailed for the same expiry date is never repeated). All three are audited (*Mail/reminder settings changed*, *Test mail*, *Manual reminder run*).
 - **Password Exceptions:** words or phrases that new passwords (change and reset) may not use. *Contains* blocks any password that includes the entry; *Exact* blocks only that exact password. Matching ignores case and common look-alikes (`@`→a, `0`→o, `1`→i/l, `3`→e, `$`/`5`→s, `7`→t, `4`→a), so `company` also blocks `C0mp@ny2026`. Entries can be edited, deactivated or removed and apply immediately, in addition to the domain password policy.
 
@@ -387,13 +437,15 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 | Threat | Control |
 |---|---|
 | Password theft from the database | Passwords are never stored; all operations go to AD over LDAPS |
-| Database leak | Answers hashed with bcrypt (cost 12) and normalized (trim + lowercase); TOTP secrets encrypted with AES-256-GCM |
+| Database leak | Answers and SMS codes hashed with bcrypt; TOTP secrets and portal-stored mobile numbers encrypted with AES-256-GCM |
 | Brute force | Per IP+username rate limit (5 per 15 min; authenticator QR generation has a separate, looser limit); account lockout after 5 failed verifications (30 min); generic error messages |
 | User enumeration | Unknown and not-enrolled users get the same response; login errors don't reveal whether the user exists |
 | Reset token replay | Single-use JWT (10 min) claimed atomically in `used_reset_tokens`; forged or wrong-type tokens rejected |
 | TOTP code replay | Last accepted time step stored per user; a code can't be reused, including the one entered at enrollment |
+| SMS code guessing or replay | 6 random digits, valid 10 minutes, consumed in one statement so it works once, dead after 5 wrong guesses; a new code replaces the old one and can be requested only every 60 seconds |
+| Codes sent to an attacker's phone | Numbers come from AD; a number a user supplies is only stored once a code sent to it is entered, and changing a verified number needs the current Windows password |
 | Security question bypass | Every stored question must be answered exactly once |
-| Weak security questions | `RESET_POLICY=both` (default) requires questions **and** a TOTP code. The questions step only yields a 5-minute step token bound to that user, which is useless as a session or reset token. |
+| Weak security questions | `RESET_POLICY=both` (default) requires questions **and** a one-time code (authenticator or SMS). The questions step only yields a 5-minute step token bound to that user, which is useless as a session or reset token. |
 | Secrets in config files | `.env` secrets DPAPI-encrypted (`protect-secret.ps1`); PFX private key protected by a random DPAPI-encrypted passphrase and git-ignored |
 | Over-privileged service account | Least-privilege account script; startup detects `adminCount=1` accounts (warning in development, refusal in production) |
 | Stolen session | 15-min access tokens; refresh tokens revoked on logout and on admin lock (`token_version`) |
@@ -425,12 +477,16 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | POST | `/api/enrollment/security-questions` | user | `{ answers: [{ questionId, answer }] ×3, currentPassword? }`. An empty `answer` keeps the saved one; `currentPassword` is required once questions exist. |
 | POST | `/api/enrollment/totp/setup` | user | `{ currentPassword? }` (required when an authenticator is already active) → `{ qrCode, secret }` (staged as pending; the current device stays active) |
 | POST | `/api/enrollment/totp/verify` | user | `{ code }` from the new device; activates it and retires the old one |
+| POST | `/api/enrollment/sms/setup` | user | `{ mobile?, currentPassword? }` → `{ mobileMasked, source, resendAfter }`. `mobile` only when AD has no number (400 `MOBILE_REQUIRED`); `currentPassword` once SMS is active. |
+| POST | `/api/enrollment/sms/verify` | user | `{ code }` from the text message; stores the number and enables SMS |
 | GET | `/api/enrollment/status` | user | – |
 | POST | `/api/password/change` | user | `{ currentPassword, newPassword, confirmPassword }`. Enrolled users only; otherwise 403 with `code: 'ENROLLMENT_REQUIRED'`. |
 | POST | `/api/password/reset/verify-user` | – | `{ username }` → `availableMethods` |
 | POST | `/api/password/reset/get-questions` | – | `{ username }` |
-| POST | `/api/password/reset/verify-questions` | – | `{ username, answers }` → `resetToken` (`either`) or `stepToken` + `nextStep: 'totp'` (`both`) |
+| POST | `/api/password/reset/verify-questions` | – | `{ username, answers }` → `resetToken` (`either`) or `stepToken` + `nextSteps` (`both`) |
 | POST | `/api/password/reset/verify-totp` | – | `{ username, code, stepToken? }` → `resetToken` (`stepToken` required under `both`) |
+| POST | `/api/password/reset/send-sms` | – | `{ username, stepToken? }` → `{ mobileMasked, resendAfter }`. Answers the same for unknown accounts and sends nothing. |
+| POST | `/api/password/reset/verify-sms` | – | `{ username, code, stepToken? }` → `resetToken` |
 | POST | `/api/password/reset/set-password` | – | `{ resetToken, newPassword, confirmPassword }` |
 | GET | `/api/admin/users` | admin | `?page&limit&search&filter=all\|enrolled\|pending\|locked\|admins` |
 | PUT | `/api/admin/users/:id/lock` | admin | `{ locked: boolean }` |
@@ -443,8 +499,9 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | PUT | `/api/admin/questions/:id` | admin | `{ questionText?, isActive?, sortOrder? }` |
 | GET/POST | `/api/admin/password-exceptions` | admin | POST `{ term, matchType?: 'contains'\|'exact' }` |
 | PUT/DELETE | `/api/admin/password-exceptions/:id` | admin | PUT `{ term?, matchType?, isActive? }` |
-| GET/PUT | `/api/admin/settings` | admin | PUT `{ settings: { 'mail.host', 'mail.port', 'mail.secure', 'mail.user', 'mail.password', 'mail.from', 'reminders.enabled', 'reminders.days', 'reminders.hour', 'reminders.source', 'security.questionCount' } }` (only the keys sent are changed) |
+| GET/PUT | `/api/admin/settings` | admin | PUT `{ settings: { 'mail.host', 'mail.port', 'mail.secure', 'mail.user', 'mail.password', 'mail.from', 'reminders.enabled', 'reminders.days', 'reminders.hour', 'reminders.source', 'security.questionCount', 'factors.totp', 'factors.sms', 'sms.url', 'sms.method', 'sms.bodyType', 'sms.bodyTemplate', 'sms.headers', 'sms.senderId', 'sms.countryCode', 'sms.successText', 'sms.messageTemplate' } }` (only the keys sent are changed) |
 | POST | `/api/admin/settings/test-mail` | admin | `{ to }` |
+| POST | `/api/admin/settings/test-sms` | admin | `{ to }` (mobile number) |
 | POST | `/api/admin/reminders/run` | admin | `{ send?: boolean }` (default: preview only) → counts (`checked`, `withExpiry`, `expired`, `inWindow`, `dueTotal`, `remindedTotal`, `sent`, `failed`), `due`, `reminded`, `skipped` |
 
 ## 12. Testing
@@ -452,13 +509,13 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (115 tests)
+npm test                   # everything (132 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
 ## 13. Maintenance & operations
 
-- **Expired reset tokens** are removed automatically every hour; reminder records 30 days after the expiry date they belong to.
+- **Expired reset tokens** are removed automatically every hour, and used SMS codes a day after they expire; reminder records 30 days after the expiry date they belong to.
 - **Audit log retention:** decide on a retention period and schedule e.g. `DELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '1 year';`
 - **Backups:** daily `pg_dump -h localhost -U postgres -Fc <database> > portal.dump`. Keep the `TOTP_ENCRYPTION_KEY` in your vault: a machine-encrypted `.env` can't be restored on another server.
 - **Upgrades:** copy the new files to the install folder (never overwrite `.env`), run `npm ci --omit=dev` and `npm run db:init` (applies schema changes), then restart the portal.
@@ -480,6 +537,12 @@ The integration tests start the app on a random port with the mock AD and reset 
 | Password change fails with an access error | The service account lacks the *Reset password* delegation on that OU, or the user is protected by AdminSDHolder. |
 | "does not meet the domain password policy" | AD rejected the password (length, complexity, history, or minimum password age). |
 | Expiry reminders not arriving | Open **Admin → Mail & Reminders**: the line under the form says whether they are on, with which stages and from which hour (a value saved there overrides `.env`). **Preview Reminders** shows how many accounts are inside the window, who was already mailed and who is due; the pass runs once a day from the configured hour, and a stage already mailed for an expiry date is never repeated. Failures appear in the audit log as *Expiry reminder mail*. |
+| Gateway rejects the number (e.g. "invalid mobile number") | The URL still holds the **vendor's own placeholder**. Provider docs use names like `$PHONE` or `$CODE`; this portal substitutes `{mobile_plain}` and `{message}`, and anything else is sent as literal text. Check the saved URL, not the one in the vendor's documentation. |
+| Gateway reports success but no message arrives | Acceptance by the gateway is not delivery by the operator. Where messages must match a template registered with the operator (for example DLT in India), anything else is dropped silently. Set `SMS_MESSAGE_TEMPLATE` to the registered text with `{otp}` where the code goes. **Send Test SMS** uses that same template with a throwaway code, so the test and real codes succeed or fail together. |
+| Every send reported as failed, though users get the message | `SMS_SUCCESS_TEXT` does not match the gateway's success reply. Clear it, send one test, read the reply in the audit log (*Test SMS* records it), then set a stable marker from it — prefer a key name that only appears on success over an exact phrase, which breaks if the gateway reformats its JSON. |
+| No text message arrives | **Admin → Verification → Send Test SMS** shows the gateway's own answer. If it fails there, check the URL, headers and body template. If the test works but users get nothing, check their number: the audit log records which masked number a code went to, and codes only go to the AD `mobile` attribute or a number the user verified in the portal. |
+| "SMS codes are not available" | The factor is off (**Admin → Verification**), or it is on without a gateway URL. |
+| Users can't enter a mobile number | The portal only asks when AD has no `mobile` value for them. Users whose number is in AD confirm it instead, and can switch to another one under *Security Settings → Text message (SMS)*. |
 | Admin menu missing | The user isn't a **direct** member of `AD_ADMIN_GROUP` (or the DN is wrong) and isn't a portal admin. Sign out and in again after fixing the group; portal-admin changes apply immediately. |
 | Everyone gets rate-limited | Clients share one IP (proxy or NAT). Set `TRUST_PROXY` correctly and/or raise `RATE_LIMIT_GENERAL_MAX`. |
 | Authenticator codes always invalid | The server clock is wrong. Keep the server synced to the domain time source (`w32tm /resync`). |

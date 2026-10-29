@@ -8,7 +8,9 @@ const { logAudit } = require('../controllers/authController');
 const VERIFIED_WITH = {
     security_questions: 'security questions',
     totp: 'authenticator app',
+    sms: 'a code sent by SMS',
     'security_questions+totp': 'security questions and authenticator app',
+    'security_questions+sms': 'security questions and a code sent by SMS',
 };
 
 const dateTime = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' });

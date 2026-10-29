@@ -1,8 +1,12 @@
+const crypto = require('crypto');
 const db = require('../config/db');
 const { MATCH_TYPES } = require('../services/passwordExceptionService');
 const { logAudit, getOrCreateUser } = require('./authController');
 const ldapService = require('../services/ldapService');
 const settingsService = require('../services/settingsService');
+const smsService = require('../services/smsService');
+const smsOtpService = require('../services/smsOtpService');
+const mobileService = require('../services/mobileService');
 const mailService = require('../services/mailService');
 const notificationService = require('../services/notificationService');
 const passwordReminderService = require('../services/passwordReminderService');
@@ -53,7 +57,7 @@ async function getUsers(req, res) {
 
         params.push(limit, offset);
         const result = await db.query(
-            `SELECT id, username, display_name, email, is_enrolled, totp_enabled,
+            `SELECT id, username, display_name, email, is_enrolled, totp_enabled, sms_enabled,
                     security_questions_set, locked, is_portal_admin, failed_attempts, created_at, updated_at
              FROM users${whereClause}
              ORDER BY created_at DESC
@@ -95,6 +99,7 @@ async function getStats(req, res) {
                 COUNT(*) FILTER (WHERE is_enrolled = FALSE) AS pending_users,
                 COUNT(*) FILTER (WHERE locked = TRUE) AS locked_users,
                 COUNT(*) FILTER (WHERE totp_enabled = TRUE) AS totp_enabled_users,
+                COUNT(*) FILTER (WHERE sms_enabled = TRUE) AS sms_enabled_users,
                 COUNT(*) FILTER (WHERE security_questions_set = TRUE) AS sq_set_users
             FROM users
         `);
@@ -504,8 +509,9 @@ async function resetEnrollment(req, res) {
 
         await client.query('BEGIN');
 
-        // Delete security answers
+        // Delete security answers and any one-time code still outstanding
         await client.query('DELETE FROM user_security_answers WHERE user_id = $1', [userId]);
+        await client.query('DELETE FROM sms_codes WHERE user_id = $1', [userId]);
 
         // Reset enrollment flags
         const result = await client.query(
@@ -515,6 +521,12 @@ async function resetEnrollment(req, res) {
                 totp_pending_secret = NULL,
                 totp_enabled = FALSE,
                 totp_last_used_step = NULL,
+                sms_enabled = FALSE,
+                mobile_number = NULL,
+                mobile_source = NULL,
+                mobile_pending = NULL,
+                mobile_pending_source = NULL,
+                mobile_verified_at = NULL,
                 security_questions_set = FALSE,
                 failed_attempts = 0,
                 last_failed_attempt = NULL,
@@ -760,6 +772,48 @@ async function sendTestMail(req, res) {
 }
 
 /**
+ * POST /api/admin/settings/test-sms
+ * Body: { to }  Sends one text message through the current gateway settings, so an admin can check the
+ * URL, headers and template before switching the factor on for users.
+ */
+async function sendTestSMS(req, res) {
+    const number = mobileService.normalize(req.body?.to);
+    try {
+        if (!number) {
+            return res.status(400).json({
+                success: false,
+                message: 'Enter a valid mobile number, including the country code (for example +919876543210).',
+            });
+        }
+        if (!smsService.isEnabled()) {
+            return res.status(400).json({ success: false, message: 'Set the SMS gateway URL before sending a test message.' });
+        }
+
+        // The configured message with a throwaway code, not wording of its own. Where the operator
+        // enforces registered templates (India: DLT), a test written any other way is dropped even though
+        // the gateway reports success - so only the real template tells you whether codes reach a handset.
+        const sample = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+        const text = smsService.buildMessage(sample, smsOtpService.CODE_TTL_MINUTES);
+        const result = await smsService.send({ to: number, text });
+        const masked = mobileService.mask(number);
+        // The gateway's own answer is recorded on success too: it is what tells you which text marks a
+        // real delivery, and some gateways answer HTTP 200 with an error code in the body.
+        const reply = result?.response ? ` - gateway: ${result.response}` : '';
+        await logAudit(req.user.userId, req.user.username, 'sms_test', null, req, true, `Test SMS sent to ${masked}${reply}`);
+
+        res.json({
+            success: true,
+            message: `Test message sent to ${masked}.`,
+            // The gateway's own answer (message id or queue status), trimmed by smsService
+            data: { gatewayResponse: result?.response || '' },
+        });
+    } catch (err) {
+        await logAudit(req.user.userId, req.user.username, 'sms_test', null, req, false, err.message);
+        res.status(502).json({ success: false, message: `The gateway refused the test message: ${err.message}` });
+    }
+}
+
+/**
  * POST /api/admin/reminders/run
  * Body: { send?: boolean }  Runs the expiry reminder pass now: a preview by default, or a real send.
  * The same per-stage records are used, so a manual send never duplicates a reminder already mailed.
@@ -827,5 +881,6 @@ module.exports = {
     getSettings,
     updateSettings,
     sendTestMail,
+    sendTestSMS,
     runReminders,
 };

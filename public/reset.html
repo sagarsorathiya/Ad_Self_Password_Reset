@@ -56,6 +56,11 @@
                             <div class="method-card-title">Authenticator App</div>
                             <div class="method-card-description">Enter the 6-digit code from your authenticator app.</div>
                         </button>
+                        <button type="button" class="method-card hidden" data-method="sms">
+                            <div class="method-card-icon">✉️</div>
+                            <div class="method-card-title">Text Message</div>
+                            <div class="method-card-description" id="smsMethodHint">We text a 6-digit code to your mobile number.</div>
+                        </button>
                     </div>
                     <div class="btn-row space-between">
                         <button type="button" class="btn btn-ghost" data-back="1">&larr; Back</button>
@@ -89,6 +94,28 @@
                         <div class="btn-row space-between">
                             <button type="button" class="btn btn-ghost" data-back="2">&larr; Back</button>
                             <button type="submit" class="btn btn-primary" id="totpBtn">Verify Code</button>
+                        </div>
+                    </form>
+                </section>
+
+                <!-- Step 3c: SMS code -->
+                <section id="step3sms" class="hidden">
+                    <div class="alert alert-success hidden" id="smsStepHint">
+                        <span class="alert-icon">✅</span>
+                        <span>Security answers verified (step 1 of 2). Now enter the code we sent to your phone.</span>
+                    </div>
+                    <form id="smsForm" novalidate>
+                        <p class="text-sm text-muted mb-4" id="smsSentTo"></p>
+                        <div class="form-group">
+                            <label class="form-label" for="smsCode">6-digit code from the text message</label>
+                            <input class="form-input otp-input" type="text" id="smsCode" inputmode="numeric"
+                                   autocomplete="one-time-code" maxlength="6" placeholder="000000">
+                            <div class="form-error"></div>
+                        </div>
+                        <div class="btn-row space-between">
+                            <button type="button" class="btn btn-ghost" data-back="2">&larr; Back</button>
+                            <button type="button" class="btn btn-ghost" id="smsResendBtn">Resend code</button>
+                            <button type="submit" class="btn btn-primary" id="smsBtn">Verify Code</button>
                         </div>
                     </form>
                 </section>

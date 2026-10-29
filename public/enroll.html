@@ -21,7 +21,7 @@
                 <div class="stepper" id="stepper">
                     <div class="step" data-step="1"><span class="step-number">1</span><span class="step-label">Security Questions</span></div>
                     <div class="step-connector"></div>
-                    <div class="step" data-step="2"><span class="step-number">2</span><span class="step-label">Authenticator</span></div>
+                    <div class="step" data-step="2"><span class="step-number">2</span><span class="step-label" id="step2Label">Authenticator</span></div>
                     <div class="step-connector"></div>
                     <div class="step" data-step="3"><span class="step-number">3</span><span class="step-label">Done</span></div>
                 </div>
@@ -37,10 +37,10 @@
                             <ol class="text-sm text-muted" id="currentQuestions" style="padding-left: 1.25rem;"></ol>
                             <button type="button" class="btn btn-secondary btn-sm" id="updateQuestionsBtn">Update questions or answers</button>
                         </div>
-                        <div class="status-item" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
+                        <div class="status-item" id="totpManageCard" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                 <strong>Authenticator app</strong>
-                                <span class="badge badge-success">Active</span>
+                                <span class="badge badge-success" id="totpManageBadge">Active</span>
                             </div>
                             <p class="text-sm text-muted">Got a new phone or reinstalled your authenticator app? Link the new device here. Your current device keeps working until the new one is verified.</p>
                             <div class="form-group reauth-group" id="totpReauthGroup" style="margin-bottom: 0;">
@@ -52,6 +52,29 @@
                                 <div class="form-error"></div>
                             </div>
                             <button type="button" class="btn btn-secondary btn-sm" id="replaceTotpBtn">Replace authenticator (new device)</button>
+                        </div>
+                        <div class="status-item hidden" id="smsManageCard" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <strong>Text message (SMS)</strong>
+                                <span class="badge" id="smsManageBadge">Not set up</span>
+                            </div>
+                            <p class="text-sm text-muted" id="smsManageText"></p>
+                            <div class="form-group" id="smsManageMobileGroup" style="margin-bottom: 0;">
+                                <label class="form-label" for="smsManageMobile">Mobile number</label>
+                                <input class="form-input" type="tel" id="smsManageMobile" maxlength="20"
+                                       autocomplete="tel" placeholder="+919876543210">
+                                <p class="form-hint">Include the country code. Leave blank to keep using the number from the directory.</p>
+                                <div class="form-error"></div>
+                            </div>
+                            <div class="form-group reauth-group" id="smsReauthGroup" style="margin-bottom: 0;">
+                                <label class="form-label" for="smsCurrentPassword">Current Windows password</label>
+                                <div class="password-wrapper">
+                                    <input class="form-input" type="password" id="smsCurrentPassword" autocomplete="current-password" maxlength="256">
+                                    <button type="button" class="password-toggle" aria-label="Show password">👁️</button>
+                                </div>
+                                <div class="form-error"></div>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="smsManageBtn">Send a code to this number</button>
                         </div>
                     </div>
                 </section>
@@ -80,8 +103,59 @@
                     </form>
                 </section>
 
-                <!-- Step 2: TOTP -->
+                <!-- Step 2: second factor (authenticator app and/or SMS, per the administrator's settings) -->
                 <section id="step2" class="hidden">
+                    <div id="factorChoice" class="hidden">
+                        <p class="text-sm text-muted mb-4 text-center">Choose how you want to prove it is you when you reset your password.</p>
+                        <div class="method-cards">
+                            <button type="button" class="method-card" data-factor="totp">
+                                <div class="method-card-icon">📱</div>
+                                <div class="method-card-title">Authenticator App</div>
+                                <div class="method-card-description">A 6-digit code from Google or Microsoft Authenticator. Works without mobile signal.</div>
+                            </button>
+                            <button type="button" class="method-card" data-factor="sms">
+                                <div class="method-card-icon">✉️</div>
+                                <div class="method-card-title">Text Message</div>
+                                <div class="method-card-description">A 6-digit code sent to your mobile number. Nothing to install.</div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="smsSetup" class="hidden">
+                        <button type="button" class="btn btn-ghost btn-sm mb-4 hidden" id="smsBackBtn">&larr; Choose another method</button>
+                        <div id="smsReplaceAlert" class="alert alert-warning hidden">
+                            <span class="alert-icon">⚠️</span>
+                            <span>Codes keep going to your current number until you verify the new one below.</span>
+                        </div>
+
+                        <form id="smsMobileForm" novalidate>
+                            <div class="form-group" id="smsDirectoryHint" style="display: none;">
+                                <p class="text-sm text-muted">We will send a 6-digit code to <strong id="smsKnownNumber"></strong>, the mobile number on your account.</p>
+                                <button type="button" class="btn btn-ghost btn-sm" id="smsOtherNumberBtn">Use a different number</button>
+                            </div>
+                            <div class="form-group" id="smsMobileGroup">
+                                <label class="form-label" for="smsMobile">Mobile number</label>
+                                <input class="form-input" type="tel" id="smsMobile" maxlength="20"
+                                       autocomplete="tel" placeholder="+919876543210">
+                                <p class="form-hint">Include the country code, for example +919876543210.</p>
+                                <div class="form-error"></div>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-block" id="smsSendBtn">Send Code</button>
+                        </form>
+
+                        <form id="smsForm" class="hidden mt-6" novalidate>
+                            <p class="text-sm text-muted mb-4">Enter the 6-digit code we sent to <strong id="smsSentTo"></strong>.</p>
+                            <div class="form-group">
+                                <label class="form-label" for="smsCode">Verification code</label>
+                                <input class="form-input otp-input" type="text" id="smsCode" inputmode="numeric"
+                                       autocomplete="one-time-code" maxlength="6" placeholder="000000">
+                                <div class="form-error"></div>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-block" id="smsVerifyBtn">Verify &amp; Enable</button>
+                            <button type="button" class="btn btn-ghost btn-block mt-4" id="smsResendBtn">Resend code</button>
+                        </form>
+                    </div>
+
                     <div id="totpSetup">
                         <div id="totpReplaceAlert" class="alert alert-warning hidden">
                             <span class="alert-icon">⚠️</span>
@@ -121,7 +195,7 @@
                         <div class="empty-state-icon" style="opacity: 1;">🎉</div>
                         <h2 class="empty-state-title">You're all set!</h2>
                         <p class="empty-state-text">
-                            You can now reset your password from the sign-in page using your security questions or authenticator app.
+                            You can now reset your password from the sign-in page using your security questions and the one-time code you set up.
                         </p>
                     </div>
                     <a href="/dashboard.html" class="btn btn-primary btn-lg">Go to Dashboard</a>
@@ -131,6 +205,6 @@
     </div>
 
     <script src="/js/app.js"></script>
-    <script src="/js/enroll.js?v=20261028"></script>
+    <script src="/js/enroll.js?v=20261029b"></script>
 </body>
 </html>

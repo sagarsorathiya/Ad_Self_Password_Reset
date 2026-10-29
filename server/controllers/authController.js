@@ -91,6 +91,7 @@ async function login(req, res) {
                     isAdmin,
                     isEnrolled: dbUser.is_enrolled,
                     totpEnabled: dbUser.totp_enabled,
+                    smsEnabled: dbUser.sms_enabled,
                     securityQuestionsSet: dbUser.security_questions_set,
                 },
             },
@@ -256,6 +257,7 @@ async function me(req, res) {
                 isAdmin: isAdGroupAdmin(req.user) || (dbUser.is_portal_admin && !dbUser.locked),
                 isEnrolled: dbUser.is_enrolled,
                 totpEnabled: dbUser.totp_enabled,
+                smsEnabled: dbUser.sms_enabled,
                 securityQuestionsSet: dbUser.security_questions_set,
             },
         });

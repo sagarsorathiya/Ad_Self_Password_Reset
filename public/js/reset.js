@@ -1,10 +1,14 @@
 (function () {
     const RESET_TOKEN_TTL_MS = 10 * 60 * 1000;
-    const SECTIONS = ['step1', 'step2', 'step3sq', 'step3totp', 'step4', 'stepDone'];
+    const SECTIONS = ['step1', 'step2', 'step3sq', 'step3totp', 'step3sms', 'step4', 'stepDone'];
 
     // Kept in memory only — never persisted
-    const state = { username: '', methods: [], questions: [], resetToken: null, policy: 'either', stepToken: null };
+    const state = {
+        username: '', methods: [], questions: [], resetToken: null, policy: 'either',
+        stepToken: null, mobileMasked: '',
+    };
     let countdownTimer = null;
+    let smsResendTimer = null;
 
     initPasswordToggles();
     bindPasswordStrength(
@@ -15,9 +19,10 @@
 
     document.querySelectorAll('[data-back]').forEach((btn) => {
         btn.addEventListener('click', () => {
-            const step = Number(btn.dataset.back);
-            // Method choice only exists under the 'either' policy
-            show(step === 1 || state.policy !== 'either' ? 'step1' : 'step2', step === 1 || state.policy !== 'either' ? 1 : 2);
+            // Back to the method cards when there was a choice, otherwise to the username
+            const toChoice = Number(btn.dataset.back) !== 1 && hasMethodChoice();
+            stopSmsCountdown();
+            show(toChoice ? 'step2' : 'step1', toChoice ? 2 : 1);
         });
     });
 
@@ -63,7 +68,13 @@
             state.policy = data.policy || 'either';
             state.questions = [];
             state.stepToken = null;
+            state.mobileMasked = data.mobileMasked || '';
             document.getElementById('totpStepHint').classList.add('hidden');
+            document.getElementById('smsStepHint').classList.add('hidden');
+            if (state.mobileMasked) {
+                document.getElementById('smsMethodHint').textContent =
+                    `We text a 6-digit code to ${state.mobileMasked}.`;
+            }
 
             if (state.methods.length === 0) {
                 setFieldError(usernameInput, 'No verification methods are available for this account. Contact your administrator.');
@@ -74,16 +85,12 @@
                 await loadQuestions();
                 return;
             }
-            if (state.policy === 'totp_only') {
-                show('step3totp', 3);
-                totpInput.focus();
+            // Nothing to choose when only one method is available (e.g. the totp_only policy)
+            if (state.methods.length === 1) {
+                await startMethod(state.methods[0]);
                 return;
             }
-
-            document.querySelectorAll('.method-card').forEach((card) => {
-                card.classList.toggle('hidden', !state.methods.includes(card.dataset.method));
-            });
-            show('step2', 2);
+            showMethodChoice(state.methods);
         } catch (err) {
             setFieldError(usernameInput, err.message);
         } finally {
@@ -93,16 +100,38 @@
 
     // ---- Step 2: Method ----
 
+    // Which methods are offered; under the 'both' policy this is used again for the second factor
+    let choiceMethods = [];
+
+    function showMethodChoice(methods, stepNumber = 2) {
+        choiceMethods = methods;
+        document.querySelectorAll('.method-card').forEach((card) => {
+            card.classList.toggle('hidden', !methods.includes(card.dataset.method));
+            card.classList.remove('selected');
+        });
+        show('step2', stepNumber);
+    }
+
+    // True while a Back button should return to the method cards rather than to the username
+    function hasMethodChoice() {
+        return choiceMethods.length > 1;
+    }
+
+    async function startMethod(method) {
+        if (method === 'security_questions') return loadQuestions();
+        if (method === 'totp') {
+            show('step3totp', 3);
+            totpInput.focus();
+            return undefined;
+        }
+        return startSms();
+    }
+
     document.querySelectorAll('.method-card').forEach((card) => {
         card.addEventListener('click', () => {
             document.querySelectorAll('.method-card').forEach((c) => c.classList.remove('selected'));
             card.classList.add('selected');
-            if (card.dataset.method === 'totp') {
-                show('step3totp', 3);
-                document.getElementById('totpCode').focus();
-            } else {
-                loadQuestions();
-            }
+            startMethod(card.dataset.method);
         });
     });
 
@@ -185,9 +214,13 @@
             inputs.forEach((input) => { input.value = ''; });
             if (data.stepToken) {
                 state.stepToken = data.stepToken;
+                // 'both' policy: the answers were step 1; now one of the user's one-time codes
+                const next = data.nextSteps?.length ? data.nextSteps : [data.nextStep || 'totp'];
+                // Each hint only shows inside its own section, so both can be enabled here
                 document.getElementById('totpStepHint').classList.remove('hidden');
-                show('step3totp', 3);
-                totpInput.focus();
+                document.getElementById('smsStepHint').classList.remove('hidden');
+                if (next.length > 1) showMethodChoice(next, 3);
+                else await startMethod(next[0]);
                 return;
             }
             onVerified(data.resetToken);
@@ -234,6 +267,99 @@
             setButtonLoading(totpBtn, false);
         }
     });
+
+    // ---- Step 3c: SMS code ----
+
+    const smsForm = document.getElementById('smsForm');
+    const smsInput = document.getElementById('smsCode');
+    const smsBtn = document.getElementById('smsBtn');
+    const smsResendBtn = document.getElementById('smsResendBtn');
+
+    smsInput.addEventListener('input', () => {
+        smsInput.value = smsInput.value.replace(/\D/g, '').slice(0, 6);
+    });
+
+    // Opening the step sends the code; the section is shown either way, so a failed send does not
+    // reveal whether the account exists
+    async function startSms(resend = false) {
+        show('step3sms', 3);
+        smsInput.value = '';
+        clearFieldErrors(smsForm);
+        if (!resend) showOverlay();
+        try {
+            const { data } = await api('POST', '/api/password/reset/send-sms', {
+                username: state.username,
+                stepToken: state.stepToken || undefined,
+            });
+            document.getElementById('smsSentTo').textContent =
+                `We sent a 6-digit code to ${data.mobileMasked}. It is valid for ${data.expiresInMinutes} minutes.`;
+            startSmsCountdown(data.resendAfter);
+            if (resend) showToast('A new code has been sent.', 'success');
+            smsInput.focus();
+        } catch (err) {
+            if (err.code === 'SMS_COOLDOWN') {
+                startSmsCountdown(err.data?.resendAfter || 60);
+                showToast(err.message, 'warning');
+            } else {
+                showToast(err.message, 'error');
+            }
+        } finally {
+            if (!resend) hideOverlay();
+        }
+    }
+
+    smsResendBtn.addEventListener('click', () => startSms(true));
+
+    smsForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        clearFieldErrors(smsForm);
+
+        const code = smsInput.value;
+        if (!/^\d{6}$/.test(code)) {
+            setFieldError(smsInput, 'Enter the 6-digit code from the text message.');
+            return;
+        }
+
+        setButtonLoading(smsBtn, true, 'Verifying...');
+        try {
+            const { data } = await api('POST', '/api/password/reset/verify-sms', {
+                username: state.username,
+                code,
+                stepToken: state.stepToken || undefined,
+            });
+            smsInput.value = '';
+            stopSmsCountdown();
+            onVerified(data.resetToken);
+        } catch (err) {
+            setFieldError(smsInput, err.message);
+            smsInput.select();
+        } finally {
+            setButtonLoading(smsBtn, false);
+        }
+    });
+
+    function startSmsCountdown(seconds) {
+        let left = Number(seconds) || 0;
+        stopSmsCountdown();
+        const tick = () => {
+            if (left <= 0) {
+                stopSmsCountdown();
+                return;
+            }
+            smsResendBtn.disabled = true;
+            smsResendBtn.textContent = `Resend in ${left}s`;
+            left -= 1;
+        };
+        tick();
+        smsResendTimer = setInterval(tick, 1000);
+    }
+
+    function stopSmsCountdown() {
+        clearInterval(smsResendTimer);
+        smsResendTimer = null;
+        smsResendBtn.disabled = false;
+        smsResendBtn.textContent = 'Resend code';
+    }
 
     // ---- Step 4: New password ----
 

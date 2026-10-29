@@ -8,7 +8,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_PASSWORD_AGE_MS = 90 * DAY_MS;
 
 const SEED_USERS = [
-    { username: 'jsmith', password: 'Passw0rd!', displayName: 'John Smith', mail: 'jsmith@example.local' },
+    { username: 'jsmith', password: 'Passw0rd!', displayName: 'John Smith', mail: 'jsmith@example.local', mobile: '+919876500001' },
     { username: 'mjones', password: 'Welcome1!', displayName: 'Mary Jones', mail: 'mjones@example.local' },
     { username: 'admin', password: 'Adm1nPass!', displayName: 'Portal Admin', mail: 'admin@example.local', admin: true },
     { username: 'disabled.user', password: 'Passw0rd!', displayName: 'Disabled User', userAccountControl: 514 },
@@ -61,6 +61,8 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
                     sAMAccountName: seed.username,
                     displayName: seed.displayName,
                     mail: seed.mail || '',
+                    // Only some accounts carry a mobile number, like a real directory
+                    mobile: seed.mobile || '',
                     userPrincipalName: `${seed.username}@example.local`,
                     memberOf: seed.admin && !secondary ? [config.ad.adminGroup] : [],
                     userAccountControl: String(seed.userAccountControl || 512),

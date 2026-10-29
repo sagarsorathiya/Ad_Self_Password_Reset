@@ -27,7 +27,7 @@
             t.classList.toggle('active', active);
             t.setAttribute('aria-selected', String(active));
         });
-        ['users', 'audit', 'questions', 'exceptions', 'mail'].forEach((n) => {
+        ['users', 'audit', 'questions', 'exceptions', 'verification', 'mail'].forEach((n) => {
             document.getElementById(`tab-${n}`).classList.toggle('hidden', n !== name);
         });
         if (!loadedTabs.has(name)) {
@@ -35,7 +35,8 @@
             if (name === 'audit') loadAudit();
             if (name === 'questions') loadQuestions();
             if (name === 'exceptions') loadExceptions();
-            if (name === 'mail') loadSettings();
+            // Both tabs edit the same settings document, so either one can load it
+            if (name === 'verification' || name === 'mail') loadSettings();
         }
     }
 
@@ -113,7 +114,7 @@
                         ? '<span class="badge badge-success">Enrolled</span>'
                         : '<span class="badge badge-warning">Pending</span>'}</td>
                 <td>${yesNo(u.security_questions_set)}</td>
-                <td>${yesNo(u.totp_enabled)}</td>
+                <td>${escapeHtml(secondFactors(u))}</td>
                 <td>${Number(u.failed_attempts) || 0}</td>
                 <td>${escapeHtml(formatDate(u.updated_at))}</td>
                 <td>
@@ -665,6 +666,12 @@
         tbody.appendChild(tr);
     }
 
+    // Which one-time code the user can prove their identity with, for the users table
+    function secondFactors(u) {
+        const factors = [u.totp_enabled ? 'Authenticator' : null, u.sms_enabled ? 'SMS' : null].filter(Boolean);
+        return factors.length ? factors.join(' + ') : '—';
+    }
+
     function yesNo(value) {
         return value
             ? '<span class="badge badge-success">Yes</span>'
@@ -701,6 +708,7 @@
     }
 
     function renderSettings(data) {
+        renderFactorSettings(data);
         document.getElementById('smtpHost').value = data.mail.host || '';
         document.getElementById('smtpPort').value = data.mail.port ?? '';
         document.getElementById('smtpFrom').value = data.mail.from || '';
@@ -733,6 +741,89 @@
             : ' All values currently come from the server .env file.';
         document.getElementById('remEffective').textContent = effective + stored;
     }
+
+    // ---- Verification tab: second factors and the SMS gateway ----
+
+    function renderFactorSettings(data) {
+        const factors = data.factors || {};
+        const sms = data.sms || {};
+        document.getElementById('facTotp').value = String(Boolean(factors.totp));
+        document.getElementById('facSms').value = String(Boolean(factors.sms));
+        document.getElementById('smsUrl').value = sms.url || '';
+        document.getElementById('smsMethod').value = sms.method || 'GET';
+        document.getElementById('smsBodyType').value = sms.bodyType || 'json';
+        document.getElementById('smsBodyTemplate').value = sms.bodyTemplate || '';
+        document.getElementById('smsHeaders').value = sms.headers || '';
+        document.getElementById('smsSenderId').value = sms.senderId || '';
+        document.getElementById('smsCountryCode').value = sms.countryCode || '';
+        document.getElementById('smsSuccessText').value = sms.successText || '';
+        document.getElementById('smsMessageTemplate').value = sms.messageTemplate || '';
+
+        const enabled = [factors.totp ? 'authenticator app' : null, factors.sms ? 'SMS code' : null].filter(Boolean);
+        document.getElementById('facEffective').textContent =
+            `Users can currently set up: ${enabled.join(' or ')}. `
+            + 'Enrollment needs the security questions plus one of these.';
+    }
+
+    document.getElementById('factorReloadBtn').addEventListener('click', loadSettings);
+
+    document.getElementById('factorForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const headers = document.getElementById('smsHeaders').value;
+        const settings = {
+            'factors.totp': document.getElementById('facTotp').value,
+            'factors.sms': document.getElementById('facSms').value,
+            'sms.url': document.getElementById('smsUrl').value.trim(),
+            'sms.method': document.getElementById('smsMethod').value,
+            'sms.bodyType': document.getElementById('smsBodyType').value,
+            'sms.bodyTemplate': document.getElementById('smsBodyTemplate').value.trim(),
+            'sms.senderId': document.getElementById('smsSenderId').value.trim(),
+            'sms.countryCode': document.getElementById('smsCountryCode').value.trim(),
+            'sms.successText': document.getElementById('smsSuccessText').value.trim(),
+            'sms.messageTemplate': document.getElementById('smsMessageTemplate').value.trim(),
+        };
+        // Like the SMTP password: the masked placeholder means "keep what is stored"
+        if (headers !== (settingsCache?.sms?.headers || '')) settings['sms.headers'] = headers;
+
+        const btn = document.getElementById('factorSaveBtn');
+        setButtonLoading(btn, true, 'Saving...');
+        try {
+            const { data, message } = await api('PUT', '/api/admin/settings', { settings });
+            settingsCache = data;
+            renderSettings(data);
+            showToast(message || 'Settings saved.', 'success');
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    });
+
+    document.getElementById('testSmsBtn').addEventListener('click', async (e) => {
+        // Captured now: e.currentTarget is null once the dispatch ends, so reading it after the await
+        // below would throw in the finally and leave the button stuck on "Sending..."
+        const btn = e.currentTarget;
+        const to = document.getElementById('testSmsTo').value.trim();
+        const result = document.getElementById('smsTestResult');
+        if (!to) {
+            showToast('Enter a mobile number for the test message.', 'error');
+            return;
+        }
+        result.textContent = '';
+        setButtonLoading(btn, true, 'Sending...');
+        try {
+            const res = await api('POST', '/api/admin/settings/test-sms', { to });
+            showToast(res.message || 'Test SMS sent.', 'success');
+            result.textContent = res.data?.gatewayResponse
+                ? `Gateway replied: ${res.data.gatewayResponse}`
+                : 'The gateway accepted the message.';
+        } catch (err) {
+            result.textContent = err.message;
+            showToast(err.message, 'error');
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    });
 
     document.getElementById('mailReloadBtn').addEventListener('click', loadSettings);
 
@@ -768,19 +859,20 @@
     });
 
     document.getElementById('testMailBtn').addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
         const to = document.getElementById('testMailTo').value.trim();
         if (!to) {
             showToast('Enter a recipient address for the test mail.', 'error');
             return;
         }
-        setButtonLoading(e.currentTarget, true, 'Sending...');
+        setButtonLoading(btn, true, 'Sending...');
         try {
             const { message } = await api('POST', '/api/admin/settings/test-mail', { to });
             showToast(message || 'Test mail sent.', 'success');
         } catch (err) {
             showToast(err.message, 'error');
         } finally {
-            setButtonLoading(e.currentTarget, false);
+            setButtonLoading(btn, false);
         }
     });
 

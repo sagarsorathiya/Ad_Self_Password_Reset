@@ -36,6 +36,20 @@ function parseText(raw, label, maxLength) {
     return value;
 }
 
+function parseChoice(raw, label, allowed, canonical) {
+    const value = canonical(parseText(raw, label, 20));
+    if (!allowed.includes(value)) throw invalid(`${label} must be one of: ${allowed.join(', ')}.`);
+    return value;
+}
+
+// The gateway URL may hold {placeholders}; they are substituted before the request is sent
+function parseUrlTemplate(raw) {
+    const value = parseText(raw, 'SMS gateway URL', 1000);
+    if (!value) return '';
+    if (!/^https?:\/\//i.test(value)) throw invalid('The SMS gateway URL must start with http:// or https://.');
+    return value;
+}
+
 // "14, 7, 3, 1" or [14, 7, 3, 1] -> sorted, de-duplicated descending stage list
 function parseDays(raw, label) {
     const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
@@ -79,6 +93,46 @@ const FIELDS = {
         group: 'security', name: 'questionCount', label: 'Security questions per user',
         parse: (v) => parseInteger(v, 'Security questions per user', 2, 5),
     },
+    'factors.totp': {
+        group: 'factors', name: 'totp', label: 'Authenticator app (TOTP)',
+        parse: (v) => parseBoolean(v, 'Authenticator app (TOTP)'),
+    },
+    'factors.sms': {
+        group: 'factors', name: 'sms', label: 'SMS one-time code',
+        parse: (v) => parseBoolean(v, 'SMS one-time code'),
+    },
+    'sms.url': { group: 'sms', name: 'url', label: 'SMS gateway URL', parse: (v) => parseUrlTemplate(v) },
+    'sms.method': {
+        group: 'sms', name: 'method', label: 'SMS request method',
+        parse: (v) => parseChoice(v, 'SMS request method', ['GET', 'POST'], (x) => x.toUpperCase()),
+    },
+    'sms.bodyType': {
+        group: 'sms', name: 'bodyType', label: 'SMS request body',
+        parse: (v) => parseChoice(v, 'SMS request body', ['json', 'form', 'none'], (x) => x.toLowerCase()),
+    },
+    'sms.bodyTemplate': { group: 'sms', name: 'bodyTemplate', label: 'SMS body template', parse: (v) => parseText(v, 'SMS body template', 2000) },
+    'sms.headers': {
+        group: 'sms', name: 'headers', label: 'SMS request headers', secret: true,
+        parse: (v) => parseText(v, 'SMS request headers', 2000),
+    },
+    'sms.senderId': { group: 'sms', name: 'senderId', label: 'SMS sender ID', parse: (v) => parseText(v, 'SMS sender ID', 32) },
+    'sms.messageTemplate': {
+        group: 'sms', name: 'messageTemplate', label: 'SMS message',
+        parse: (v) => {
+            const value = parseText(v, 'SMS message', 480);
+            if (!value.includes('{otp}')) throw invalid('The SMS message must contain {otp}, the one-time code.');
+            return value;
+        },
+    },
+    'sms.countryCode': {
+        group: 'sms', name: 'countryCode', label: 'Default dialling code',
+        parse: (v) => {
+            const value = parseText(v, 'Default dialling code', 5);
+            if (value && !/^\+\d{1,4}$/.test(value)) throw invalid('Default dialling code must look like +91.');
+            return value;
+        },
+    },
+    'sms.successText': { group: 'sms', name: 'successText', label: 'Success text in the reply', parse: (v) => parseText(v, 'Success text in the reply', 100) },
     'reminders.source': {
         group: 'reminders', name: 'source', label: 'Expiry source',
         parse: (v) => {
@@ -95,6 +149,8 @@ function defaults() {
         mail: { ...config.mail },
         reminders: { ...config.reminders, days: [...config.reminders.days] },
         security: { ...config.security },
+        factors: { ...config.factors },
+        sms: { ...config.sms },
         // Keys whose value comes from the database rather than .env
         overrides: [],
     };
@@ -165,6 +221,16 @@ async function save(values, actor) {
     if (merged.mail.host && !merged.mail.from) {
         throw invalid('A From address is required when an SMTP host is set.');
     }
+    if (!merged.factors.totp && !merged.factors.sms) {
+        throw invalid('At least one second factor must stay enabled.');
+    }
+    if (merged.factors.sms && !merged.sms.url) {
+        throw invalid('SMS one-time codes need a gateway URL.');
+    }
+    if (merged.factors.sms && merged.sms.method === 'POST'
+        && merged.sms.bodyType !== 'none' && !merged.sms.bodyTemplate) {
+        throw invalid('A POST to the SMS gateway needs a body template (or set the body to "none").');
+    }
 
     for (const [key, value] of writes) {
         await db.query(
@@ -184,6 +250,8 @@ function previewMerge(writes) {
         mail: { ...snapshot.mail },
         reminders: { ...snapshot.reminders },
         security: { ...snapshot.security },
+        factors: { ...snapshot.factors },
+        sms: { ...snapshot.sms },
     };
     for (const [key, value] of writes) {
         const field = FIELDS[key];
@@ -213,6 +281,12 @@ async function describe() {
         },
         reminders: { ...settings.reminders, days: [...settings.reminders.days] },
         security: { ...settings.security },
+        factors: { ...settings.factors },
+        sms: {
+            ...settings.sms,
+            // Holds the gateway API key; like the SMTP password it is only ever returned masked
+            headers: settings.sms.headers ? SECRET_PLACEHOLDER : '',
+        },
         // From .env, shown read-only: these are not editable in the panel
         envDefaults: {
             host: config.mail.host,
@@ -223,6 +297,9 @@ async function describe() {
             questionCount: config.security.questionCount,
             source: config.reminders.source,
             enabled: config.reminders.enabled,
+            factorTotp: config.factors.totp,
+            factorSms: config.factors.sms,
+            smsUrl: config.sms.url,
         },
         secondaryDomain: config.ad.secondary ? config.ad.secondary.name : null,
         primaryDomain: config.ad.name,

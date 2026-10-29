@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const enrollmentController = require('../controllers/enrollmentController');
 const { authenticate } = require('../middleware/auth');
-const { verifyLimiter, enrollLimiter } =require('../middleware/rateLimiter');
+const { verifyLimiter, enrollLimiter, smsLimiter } = require('../middleware/rateLimiter');
 
 // All enrollment routes require authentication
 router.use(authenticate);
@@ -21,6 +21,12 @@ router.post('/totp/setup', enrollLimiter, enrollmentController.setupTOTP);
 
 // POST /api/enrollment/totp/verify
 router.post('/totp/verify', verifyLimiter, enrollmentController.verifyTOTPSetup);
+
+// POST /api/enrollment/sms/setup  (sends a one-time code to the user's mobile)
+router.post('/sms/setup', smsLimiter, enrollmentController.setupSMS);
+
+// POST /api/enrollment/sms/verify
+router.post('/sms/verify', verifyLimiter, enrollmentController.verifySMS);
 
 // GET /api/enrollment/status
 router.get('/status', enrollmentController.getStatus);

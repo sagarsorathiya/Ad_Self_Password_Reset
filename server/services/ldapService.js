@@ -137,7 +137,7 @@ function createDirectory(ad) {
                     scope: 'sub',
                     filter: `(&(objectClass=user)(objectCategory=person)(sAMAccountName=${escapeFilterValue(username)}))`,
                     attributes: [
-                        'dn', 'sAMAccountName', 'displayName', 'mail',
+                        'dn', 'sAMAccountName', 'displayName', 'mail', 'mobile',
                         'userPrincipalName', 'memberOf', 'userAccountControl',
                         'pwdLastSet', 'lockoutTime', 'adminCount',
                     ],

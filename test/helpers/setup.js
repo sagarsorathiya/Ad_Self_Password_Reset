@@ -60,7 +60,7 @@ async function startServer() {
 
 async function resetState() {
     await db.query(
-        'TRUNCATE users, user_security_answers, audit_log, used_reset_tokens, security_questions, password_exceptions, password_reminders, app_settings RESTART IDENTITY CASCADE'
+        'TRUNCATE users, user_security_answers, audit_log, used_reset_tokens, security_questions, password_exceptions, password_reminders, app_settings, sms_codes RESTART IDENTITY CASCADE'
     );
     await db.query(SCHEMA_SQL);
     mockAd.reset();

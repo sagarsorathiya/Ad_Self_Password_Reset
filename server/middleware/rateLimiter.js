@@ -83,10 +83,27 @@ const enrollLimiter = rateLimit({
     },
 });
 
+/**
+ * Endpoints that send a text message. Every request costs money and rings someone's phone, so these get
+ * their own small budget instead of sharing the verification one; smsOtpService adds a per-user cooldown.
+ */
+const smsLimiter = rateLimit({
+    windowMs: config.rateLimit.windowMs,
+    max: config.rateLimit.max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => keyFor(req, 'sms'),
+    message: {
+        success: false,
+        message: 'Too many code requests. Please try again in 15 minutes.',
+    },
+});
+
 module.exports = {
     enrollLimiter,
     generalLimiter,
     loginLimiter,
     resetLimiter,
+    smsLimiter,
     verifyLimiter,
 };

@@ -31,10 +31,11 @@ router.post('/password-exceptions', adminController.addPasswordException);
 router.put('/password-exceptions/:id', adminController.updatePasswordException);
 router.delete('/password-exceptions/:id', adminController.deletePasswordException);
 
-// Mail and expiry reminder settings
+// Mail, SMS and expiry reminder settings
 router.get('/settings', adminController.getSettings);
 router.put('/settings', adminController.updateSettings);
 router.post('/settings/test-mail', adminController.sendTestMail);
+router.post('/settings/test-sms', adminController.sendTestSMS);
 router.post('/reminders/run', adminController.runReminders);
 
 module.exports = router;

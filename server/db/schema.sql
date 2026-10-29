@@ -98,6 +98,30 @@ CREATE TABLE IF NOT EXISTS password_reminders (
     PRIMARY KEY (username, expires_at, days_before)
 );
 
+-- SMS second factor: the number a one-time code is sent to.
+-- 'ad'     = the mobile attribute of the AD account is used (re-read on every send, so it stays in sync)
+-- 'portal' = the user entered a number here because AD had none; stored AES-256-GCM encrypted
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_number TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_source VARCHAR(10);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_pending TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_pending_source VARCHAR(10);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_verified_at TIMESTAMP;
+
+-- One-time codes sent by SMS. Only the newest unconsumed row per (user, purpose) is accepted; the code
+-- itself is stored as a bcrypt hash, so the database never holds a usable code.
+CREATE TABLE IF NOT EXISTS sms_codes (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose VARCHAR(20) NOT NULL,          -- 'enrollment' or 'reset'
+    code_hash VARCHAR(255) NOT NULL,
+    mobile_hint VARCHAR(40),               -- masked number the code was sent to, for the audit log
+    attempts INTEGER NOT NULL DEFAULT 0,
+    expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Admin-editable runtime settings (Administration -> Mail & Reminders). A missing key keeps the .env value;
 -- secret values (SMTP password) are AES-256-GCM encrypted, like TOTP secrets.
 CREATE TABLE IF NOT EXISTS app_settings (
@@ -114,6 +138,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
 CREATE INDEX IF NOT EXISTS idx_used_reset_tokens_jti ON used_reset_tokens(token_jti);
 CREATE INDEX IF NOT EXISTS idx_used_reset_tokens_expires ON used_reset_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_sms_codes_user ON sms_codes(user_id, purpose, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sms_codes_expires ON sms_codes(expires_at);
 
 -- Seed default security questions (only into an empty table, so re-running is safe)
 INSERT INTO security_questions (question_text, sort_order)

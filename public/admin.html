@@ -29,6 +29,7 @@
                 <button class="filter-tab" role="tab" data-tab="audit">Audit Log</button>
                 <button class="filter-tab" role="tab" data-tab="questions">Security Questions</button>
                 <button class="filter-tab" role="tab" data-tab="exceptions">Password Exceptions</button>
+                <button class="filter-tab" role="tab" data-tab="verification">Verification</button>
                 <button class="filter-tab" role="tab" data-tab="mail">Mail &amp; Reminders</button>
             </div>
 
@@ -55,7 +56,7 @@
                                 <th>Email</th>
                                 <th>Status</th>
                                 <th>Questions</th>
-                                <th>TOTP</th>
+                                <th>2nd Factor</th>
                                 <th>Failed</th>
                                 <th>Last Activity</th>
                                 <th>Actions</th>
@@ -85,6 +86,8 @@
                             <option value="enrollment">Enrollment</option>
                             <option value="enrollment_reset">Enrollment reset</option>
                             <option value="totp_replaced">Authenticator replaced</option>
+                            <option value="sms_replaced">Mobile number changed</option>
+                            <option value="password_reset_sms">Reset code sent by SMS</option>
                             <option value="user_locked">User locked</option>
                             <option value="user_unlocked">User unlocked</option>
                             <option value="admin_granted">Admin granted</option>
@@ -95,6 +98,7 @@
                             <option value="password_exception_updated">Password exception updated</option>
                             <option value="password_exception_deleted">Password exception removed</option>
                             <option value="settings_updated">Mail/reminder settings changed</option>
+                            <option value="sms_test">Test SMS</option>
                             <option value="mail_test">Test mail</option>
                             <option value="reminder_run">Manual reminder run</option>
                         </select>
@@ -190,6 +194,137 @@
             </section>
 
             <!-- Mail and expiry reminders -->
+            <!-- Second factors and the SMS gateway -->
+            <section id="tab-verification" class="hidden">
+                <p class="text-sm text-muted mb-4">
+                    Which second factor users can set up, and how text messages are sent. Changes apply immediately
+                    and override the server's .env file once saved. Users who already hold a factor you switch off
+                    keep it, but can no longer use it to reset their password.
+                </p>
+
+                <form id="factorForm" novalidate>
+                    <div class="card card-full mb-6">
+                        <h2 class="settings-title">Second factors</h2>
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label class="form-label" for="facTotp">Authenticator app (TOTP)</label>
+                                <select class="form-select" id="facTotp">
+                                    <option value="true">Available to users</option>
+                                    <option value="false">Off</option>
+                                </select>
+                                <div class="form-hint">A 6-digit code from Google or Microsoft Authenticator.</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="facSms">SMS one-time code</label>
+                                <select class="form-select" id="facSms">
+                                    <option value="true">Available to users</option>
+                                    <option value="false">Off</option>
+                                </select>
+                                <div class="form-hint">Needs a gateway below. Numbers come from the directory's
+                                    mobile attribute; users without one are asked to enter theirs.</div>
+                            </div>
+                        </div>
+                        <p class="text-sm text-muted" id="facEffective"></p>
+                    </div>
+
+                    <div class="card card-full mb-6">
+                        <h2 class="settings-title">SMS gateway</h2>
+                        <p class="text-sm text-muted mb-4">
+                            Any gateway with an HTTP API works. In the URL, body and headers you can use
+                            <code>{mobile}</code> (with +), <code>{mobile_plain}</code> (digits only),
+                            <code>{message}</code>, <code>{otp}</code> and <code>{sender}</code>. Values are escaped
+                            for where they appear, so nothing can break the request.
+                        </p>
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label class="form-label" for="smsUrl">Gateway URL</label>
+                                <input class="form-input" type="text" id="smsUrl" maxlength="1000" autocomplete="off"
+                                       placeholder="https://sms.example.com/api/send?to={mobile_plain}&amp;text={message}">
+                                <div class="form-hint">Empty = SMS codes cannot be switched on.</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smsMethod">Request method</label>
+                                <select class="form-select" id="smsMethod">
+                                    <option value="GET">GET</option>
+                                    <option value="POST">POST</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smsBodyType">POST body format</label>
+                                <select class="form-select" id="smsBodyType">
+                                    <option value="json">JSON</option>
+                                    <option value="form">Form encoded</option>
+                                    <option value="none">No body</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smsCountryCode">Default dialling code</label>
+                                <input class="form-input" type="text" id="smsCountryCode" maxlength="5" autocomplete="off"
+                                       placeholder="+91">
+                                <div class="form-hint">Added to numbers entered without a country code.</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smsSenderId">Sender ID (optional)</label>
+                                <input class="form-input" type="text" id="smsSenderId" maxlength="32" autocomplete="off">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smsSuccessText">Success text in the reply (optional)</label>
+                                <input class="form-input" type="text" id="smsSuccessText" maxlength="100" autocomplete="off">
+                                <div class="form-hint">For gateways that answer HTTP 200 even on failure.</div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="smsBodyTemplate">POST body template</label>
+                            <textarea class="form-input" id="smsBodyTemplate" rows="4" maxlength="2000"
+                                      autocomplete="off" spellcheck="false"
+                                      placeholder='{"to": "{mobile}", "text": "{message}"}'></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="smsHeaders">Request headers</label>
+                            <textarea class="form-input" id="smsHeaders" rows="3" maxlength="2000"
+                                      autocomplete="off" spellcheck="false"
+                                      placeholder="Authorization: Bearer your-api-key"></textarea>
+                            <div class="form-hint">One "Name: value" per line. Stored encrypted and never shown again;
+                                leave unchanged to keep what is saved.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="smsMessageTemplate">Message text</label>
+                            <textarea class="form-input" id="smsMessageTemplate" rows="3" maxlength="480"
+                                      autocomplete="off"></textarea>
+                            <div class="form-hint">Must contain {otp}. {minutes} is how long the code stays valid,
+                                {portal} the portal name.</div>
+                        </div>
+                    </div>
+
+                    <div class="toolbar">
+                        <div class="toolbar-left" style="gap: var(--space-2);">
+                            <button type="submit" class="btn btn-primary" id="factorSaveBtn">Save Settings</button>
+                            <button type="button" class="btn btn-secondary" id="factorReloadBtn">Reload</button>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="card card-full mb-6">
+                    <h2 class="settings-title">Test message</h2>
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="testSmsTo">Send a test SMS to</label>
+                            <input class="form-input" type="tel" id="testSmsTo" maxlength="20" autocomplete="off"
+                                   placeholder="+919876543210">
+                            <div class="form-hint">Sends the message text above with a throwaway code, so the
+                                test is the same message your users get. Where the operator only delivers registered
+                                templates (India: DLT), that is the only test that proves anything.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="testSmsBtn">Test SMS</label>
+                            <button type="button" class="btn btn-secondary" id="testSmsBtn">Send Test SMS</button>
+                        </div>
+                    </div>
+                    <p class="text-sm text-muted" id="smsTestResult"></p>
+                </div>
+            </section>
+
+            <!-- Mail and reminders -->
             <section id="tab-mail" class="hidden">
                 <p class="text-sm text-muted mb-4">
                     These settings apply immediately, without restarting the portal, and override the server's .env
@@ -307,6 +442,6 @@
     </div>
 
     <script src="/js/app.js"></script>
-    <script src="/js/admin.js?v=20261028"></script>
+    <script src="/js/admin.js?v=20261029b"></script>
 </body>
 </html>

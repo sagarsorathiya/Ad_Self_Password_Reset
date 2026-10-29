@@ -7,6 +7,8 @@ const config = require('./config/default');
 const db = require('./config/db');
 const ldapService = require('./services/ldapService');
 const passwordReminderService = require('./services/passwordReminderService');
+const smsOtpService = require('./services/smsOtpService');
+const smsService = require('./services/smsService');
 const settingsService = require('./services/settingsService');
 
 const PORT = config.server.port;
@@ -56,8 +58,11 @@ async function cleanupExpiredTokens() {
     try {
         const result = await db.query('DELETE FROM used_reset_tokens WHERE expires_at < NOW()');
         if (result.rowCount > 0) console.log(`[Cleanup] Removed ${result.rowCount} expired reset token(s)`);
+        // Kept for a day after expiry so an admin can still see the attempt in context, then dropped
+        const codes = await smsOtpService.purgeExpired();
+        if (codes > 0) console.log(`[Cleanup] Removed ${codes} expired SMS code(s)`);
     } catch (err) {
-        console.error('[Cleanup] Failed to purge expired reset tokens:', err.message);
+        console.error('[Cleanup] Failed to purge expired tokens:', err.message);
     }
 }
 
@@ -83,8 +88,13 @@ server.listen(PORT, config.server.host, () => {
     }
     console.log(`  Trust proxy: ${config.server.trustProxy}`);
     // Effective values: .env with the admin panel's stored settings (app_settings) on top
-    const { mail, reminders } = settingsService.current();
+    const { mail, reminders, factors, sms } = settingsService.current();
     console.log(`  Mail:        ${mail.host ? `${mail.host}:${mail.port}` : 'off (no SMTP host configured)'}`);
+    const enabledFactors = [factors.totp ? 'authenticator app' : null, factors.sms ? 'SMS code' : null].filter(Boolean);
+    console.log(`  2nd factor:  ${enabledFactors.join(', ')}`);
+    if (factors.sms) {
+        console.log(`  SMS gateway: ${sms.url ? `${sms.method} ${smsService.describeGateway().host}` : 'NOT CONFIGURED'}`);
+    }
     if (reminders.enabled) {
         console.log(`  Reminders:   ${reminders.days.join(', ')} days before expiry, daily from ${reminders.hour}:00`);
     } else {

@@ -7,6 +7,8 @@ const settingsService = require('../services/settingsService');
 const db = require('../config/db');
 const ldapService = require('../services/ldapService');
 const totpService = require('../services/totpService');
+const smsOtpService = require('../services/smsOtpService');
+const mobileService = require('../services/mobileService');
 const passwordExceptionService = require('../services/passwordExceptionService');
 const passwordSyncService = require('../services/passwordSyncService');
 const notificationService = require('../services/notificationService');
@@ -160,7 +162,9 @@ async function verifyUser(req, res) {
 
         // Check if user is enrolled in our portal
         const result = await db.query(
-            'SELECT id, is_enrolled, totp_enabled, security_questions_set, locked FROM users WHERE username = $1',
+            `SELECT id, is_enrolled, totp_enabled, sms_enabled, security_questions_set, locked,
+                    mobile_number, mobile_source
+             FROM users WHERE username = $1`,
             [username]
         );
 
@@ -180,14 +184,25 @@ async function verifyUser(req, res) {
             });
         }
 
-        // Return available verification methods (per RESET_POLICY)
+        // Return available verification methods (per RESET_POLICY and the enabled second factors)
         const policy = config.reset.policy;
+        const factors = settingsService.current().factors;
+        const mobile = factors.sms && dbUser.sms_enabled ? mobileService.resolve(dbUser, adUser) : null;
+
+        // Second factors this user can actually use right now; SMS needs a number to send to
+        const secondFactors = [];
+        if (factors.totp && dbUser.totp_enabled) secondFactors.push('totp');
+        if (mobile) secondFactors.push('sms');
+
         const methods = [];
         if (policy === 'both') {
-            if (dbUser.security_questions_set && dbUser.totp_enabled) methods.push('security_questions', 'totp');
+            // Questions first, then any one second factor
+            if (dbUser.security_questions_set && secondFactors.length > 0) {
+                methods.push('security_questions', ...secondFactors);
+            }
         } else {
             if (policy === 'either' && dbUser.security_questions_set) methods.push('security_questions');
-            if (dbUser.totp_enabled) methods.push('totp');
+            methods.push(...secondFactors);
         }
 
         if (methods.length === 0) {
@@ -203,6 +218,8 @@ async function verifyUser(req, res) {
                 username,
                 policy,
                 availableMethods: methods,
+                // Where an SMS code would go, so the user can tell it is the right phone
+                mobileMasked: mobile ? mobileService.mask(mobile.number) : null,
                 message: 'User verified. Please choose a verification method.',
             },
         });
@@ -278,7 +295,10 @@ async function verifySecurityQuestions(req, res) {
         }
 
         // Get user
-        const userResult = await db.query('SELECT id, locked FROM users WHERE username = $1 AND is_enrolled = TRUE', [username]);
+        const userResult = await db.query(
+            'SELECT id, locked, totp_enabled, sms_enabled FROM users WHERE username = $1 AND is_enrolled = TRUE',
+            [username]
+        );
         if (userResult.rows.length === 0) {
             // Same work and response as a wrong answer, so unknown users can't be distinguished
             await bcrypt.compare('timing-equalizer', DUMMY_ANSWER_HASH);
@@ -355,10 +375,20 @@ async function verifySecurityQuestions(req, res) {
                 config.jwt.secret,
                 { expiresIn: '5m', algorithm: 'HS256' }
             );
+            const factors = settingsService.current().factors;
+            const nextSteps = [];
+            if (factors.totp && dbUser.totp_enabled) nextSteps.push('totp');
+            if (factors.sms && dbUser.sms_enabled) nextSteps.push('sms');
+
             await logAudit(dbUser.id, username, 'password_reset_verify', 'security_questions', req, true, 'Step 1 of 2');
             return res.json({
                 success: true,
-                data: { stepToken, nextStep: 'totp', message: 'Answers verified. Now enter your authenticator code.' },
+                data: {
+                    stepToken,
+                    nextSteps,
+                    nextStep: nextSteps[0] || 'totp',
+                    message: 'Answers verified. Now enter your one-time code.',
+                },
             });
         }
 
@@ -418,21 +448,13 @@ async function verifyTOTP(req, res) {
             });
         }
 
-        // 'both' policy: the TOTP step is only accepted after the questions step for the same user
-        if (config.reset.policy === 'both') {
-            let step;
-            try {
-                step = jwt.verify(String(stepToken || ''), config.jwt.secret, { algorithms: ['HS256'] });
-            } catch {
-                step = null;
-            }
-            if (!step || step.type !== 'reset_step' || step.userId !== userResult.rows[0].id) {
-                return res.status(400).json({
-                    success: false,
-                    code: 'STEP_REQUIRED',
-                    message: 'Please answer your security questions first.',
-                });
-            }
+        // 'both' policy: the code step is only accepted after the questions step for the same user
+        if (!stepTokenAccepted(stepToken, userResult.rows[0].id)) {
+            return res.status(400).json({
+                success: false,
+                code: 'STEP_REQUIRED',
+                message: 'Please answer your security questions first.',
+            });
         }
 
         const dbUser = userResult.rows[0];
@@ -492,6 +514,164 @@ async function verifyTOTP(req, res) {
             success: false,
             message: 'An error occurred. Please try again.',
         });
+    }
+}
+
+/**
+ * POST /api/password/reset/send-sms
+ * Step 2c (part 1): text a one-time code to the number held for the account.
+ * Body: { username, stepToken? }
+ *
+ * Answers the same way for every username: an account that does not exist, is not enrolled or has no
+ * mobile number gets a plausible masked number and no message, so the page cannot be used to find out
+ * who has an account here.
+ */
+async function sendResetSMS(req, res) {
+    const { username, stepToken } = req.body || {};
+    const decoy = () => res.json({
+        success: true,
+        data: {
+            mobileMasked: mobileService.decoyMask(username),
+            resendAfter: smsOtpService.RESEND_COOLDOWN_SECONDS,
+            expiresInMinutes: smsOtpService.CODE_TTL_MINUTES,
+        },
+    });
+
+    try {
+        if (typeof username !== 'string' || !username) {
+            return res.status(400).json({ success: false, message: 'Username is required.' });
+        }
+        if (!settingsService.current().factors.sms) {
+            return res.status(400).json({ success: false, message: 'SMS codes are not available.' });
+        }
+
+        const userResult = await db.query(
+            `SELECT id, sms_enabled, locked, mobile_number, mobile_source
+             FROM users WHERE username = $1 AND is_enrolled = TRUE`,
+            [username]
+        );
+        if (userResult.rows.length === 0 || !userResult.rows[0].sms_enabled) return decoy();
+
+        const dbUser = userResult.rows[0];
+
+        if (dbUser.locked) {
+            return res.status(403).json({
+                success: false,
+                message: 'Your account has been locked. Please contact your administrator.',
+            });
+        }
+        if (!stepTokenAccepted(stepToken, dbUser.id)) {
+            return res.status(400).json({
+                success: false,
+                code: 'STEP_REQUIRED',
+                message: 'Please answer your security questions first.',
+            });
+        }
+        if (await isLockedOut(dbUser.id)) {
+            return res.status(429).json({ success: false, message: 'Too many failed attempts. Please try again later.' });
+        }
+
+        const mobile = mobileService.resolve(dbUser, await ldapService.findUser(username));
+        if (!mobile) return decoy();
+
+        const masked = mobileService.mask(mobile.number);
+        const { resendAfter } = await smsOtpService.issue({
+            userId: dbUser.id,
+            purpose: 'reset',
+            number: mobile.number,
+            maskedNumber: masked,
+        });
+        await logAudit(dbUser.id, username, 'password_reset_sms', 'sms', req, true, `Code sent to ${masked}`);
+
+        res.json({
+            success: true,
+            data: { mobileMasked: masked, resendAfter, expiresInMinutes: smsOtpService.CODE_TTL_MINUTES },
+        });
+    } catch (err) {
+        if (err instanceof smsOtpService.CooldownError) {
+            return res.status(429).json({
+                success: false,
+                code: 'SMS_COOLDOWN',
+                message: err.message,
+                data: { resendAfter: err.retryAfter },
+            });
+        }
+        console.error('[Password] Send reset SMS error:', err.message);
+        res.status(502).json({
+            success: false,
+            message: 'We could not send the text message. Please try another method or contact your administrator.',
+        });
+    }
+}
+
+/**
+ * POST /api/password/reset/verify-sms
+ * Step 2c (part 2): check the code that was texted to the user.
+ * Body: { username, code, stepToken? }
+ */
+async function verifySMS(req, res) {
+    try {
+        const { username, code, stepToken } = req.body || {};
+
+        if (typeof username !== 'string' || !username || typeof code !== 'string' || code.length !== 6) {
+            return res.status(400).json({
+                success: false,
+                message: 'Username and a valid 6-digit code are required.',
+            });
+        }
+
+        const userResult = await db.query(
+            'SELECT id, sms_enabled, locked FROM users WHERE username = $1 AND is_enrolled = TRUE',
+            [username]
+        );
+        // Same answer as a wrong code: an unknown account must not be distinguishable here either
+        if (userResult.rows.length === 0 || !userResult.rows[0].sms_enabled) {
+            return res.status(400).json({ success: false, message: smsOtpService.codeErrorMessage('mismatch') });
+        }
+
+        const dbUser = userResult.rows[0];
+
+        if (dbUser.locked) {
+            return res.status(403).json({
+                success: false,
+                message: 'Your account has been locked. Please contact your administrator.',
+            });
+        }
+        if (!stepTokenAccepted(stepToken, dbUser.id)) {
+            return res.status(400).json({
+                success: false,
+                code: 'STEP_REQUIRED',
+                message: 'Please answer your security questions first.',
+            });
+        }
+        if (await isLockedOut(dbUser.id)) {
+            return res.status(429).json({ success: false, message: 'Too many failed attempts. Please try again later.' });
+        }
+
+        const check = await smsOtpService.verify({ userId: dbUser.id, purpose: 'reset', code });
+        if (!check.ok) {
+            await incrementFailedAttempts(dbUser.id);
+            await logAudit(dbUser.id, username, 'password_reset_verify', 'sms', req, false, `Invalid SMS code (${check.reason})`);
+            return res.status(400).json({ success: false, message: smsOtpService.codeErrorMessage(check.reason) });
+        }
+
+        await db.query(
+            'UPDATE users SET failed_attempts = 0, last_failed_attempt = NULL WHERE id = $1',
+            [dbUser.id]
+        );
+
+        const method = config.reset.policy === 'both' ? 'security_questions+sms' : 'sms';
+        const resetToken = generateResetToken(dbUser.id, username, method);
+
+        await logAudit(dbUser.id, username, 'password_reset_verify', method, req, true);
+
+        res.json({
+            success: true,
+            data: { resetToken, message: 'Identity verified. You may now set a new password.' },
+        });
+    } catch (err) {
+        console.error('[Password] Verify SMS error:', err.message);
+        res.status(500).json({ success: false, message: 'An error occurred. Please try again.' });
     }
 }
 
@@ -677,6 +857,20 @@ function exceptionMessage({ term, match_type: matchType }) {
 }
 
 /**
+ * Under the 'both' policy a second factor only counts once the security questions have been answered,
+ * proved by the short-lived reset_step token issued there. Always true under the other policies.
+ */
+function stepTokenAccepted(stepToken, userId) {
+    if (config.reset.policy !== 'both') return true;
+    try {
+        const step = jwt.verify(String(stepToken || ''), config.jwt.secret, { algorithms: ['HS256'] });
+        return step.type === 'reset_step' && step.userId === userId;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Generate a single-use reset token (JWT with JTI).
  */
 function generateResetToken(userId, username, method) {
@@ -737,5 +931,7 @@ module.exports = {
     getUserQuestions,
     verifySecurityQuestions,
     verifyTOTP,
+    sendResetSMS,
+    verifySMS,
     setPassword,
 };

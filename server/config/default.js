@@ -124,6 +124,31 @@ const config = {
         questionCount: Math.min(5, Math.max(2, parseInt(process.env.SECURITY_QUESTION_COUNT, 10) || 3)),
     },
 
+    // Which second factors users can enrol in (admin panel overrides this). At least one must stay on.
+    factors: {
+        totp: process.env.FACTOR_TOTP !== 'false',
+        sms: process.env.FACTOR_SMS === 'true',
+    },
+
+    // One-time codes by SMS, sent through any gateway that exposes an HTTP API.
+    // The URL, body and headers are templates; see .env.example for the placeholders.
+    sms: {
+        url: process.env.SMS_API_URL || '',
+        method: (process.env.SMS_API_METHOD || 'GET').toUpperCase(),
+        // How the body of a POST is encoded: json, form or none
+        bodyType: (process.env.SMS_BODY_TYPE || 'json').toLowerCase(),
+        bodyTemplate: process.env.SMS_BODY_TEMPLATE || '',
+        // Extra request headers, one "Name: value" per line (API keys belong here)
+        headers: process.env.SMS_HEADERS || '',
+        senderId: process.env.SMS_SENDER_ID || '',
+        messageTemplate: process.env.SMS_MESSAGE_TEMPLATE
+            || 'Your {portal} verification code is {otp}. It expires in {minutes} minutes. Do not share it with anyone.',
+        // Dialling code added to numbers entered without one, e.g. +91
+        countryCode: process.env.SMS_COUNTRY_CODE || '',
+        // Optional: the gateway answers 200 even on failure, so the body must contain this text to count as sent
+        successText: process.env.SMS_SUCCESS_TEXT || '',
+    },
+
     // Outgoing mail (security alerts and expiry reminders). Empty SMTP_HOST = no mail is sent.
     mail: {
         host: process.env.SMTP_HOST || '',
@@ -169,6 +194,22 @@ if (!['primary', 'secondary'].includes(config.reminders.source)) {
 }
 if (config.reminders.source === 'secondary' && !config.ad.secondary) {
     throw new Error('PASSWORD_REMINDER_SOURCE=secondary requires the second domain (AD2_URL or AD2_SERVER).');
+}
+
+if (!config.factors.totp && !config.factors.sms) {
+    throw new Error('At least one second factor must be enabled: set FACTOR_TOTP=true or FACTOR_SMS=true.');
+}
+if (!['GET', 'POST'].includes(config.sms.method)) {
+    throw new Error('SMS_API_METHOD must be GET or POST.');
+}
+if (!['json', 'form', 'none'].includes(config.sms.bodyType)) {
+    throw new Error('SMS_BODY_TYPE must be json, form or none.');
+}
+if (config.factors.sms && !config.sms.url) {
+    throw new Error('FACTOR_SMS=true requires SMS_API_URL (or enable SMS in the admin panel once a gateway is configured).');
+}
+if (config.sms.countryCode && !/^\+\d{1,4}$/.test(config.sms.countryCode)) {
+    throw new Error('SMS_COUNTRY_CODE must be a dialling code such as +91.');
 }
 
 if (!['both', 'totp_only', 'either'].includes(config.reset.policy)) {
