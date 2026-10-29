@@ -36,6 +36,28 @@ async function confirmCurrentPassword(req, res, method) {
 }
 
 /**
+ * Decide whether a factor change has to prove password knowledge, and do it.
+ *
+ * The rule is about the account, not the factor: once a user is enrolled they can reset their AD password
+ * with the factors they hold, so *adding* a second one is as sensitive as replacing the one they have. A
+ * stolen session could otherwise bind an attacker-controlled authenticator or phone to an enrolled account
+ * and, from then on, reset that user's domain password from anywhere without ever knowing the old one.
+ * Checking only "is this same factor already set" missed exactly that case (security review 2026-10-29).
+ *
+ * First-time enrolment stays password-free: an account that is not enrolled yet cannot reset anything,
+ * so there is no capability to hijack, and the wizard would otherwise ask for the password twice.
+ *
+ * @param {object} dbUser - users row holding at least is_enrolled and the factor's own flag
+ * @param {'totp'|'sms'} method - audited on failure, and names the factor's own flag
+ * @returns {Promise<boolean>} false when the response has already been sent
+ */
+async function confirmFactorChange(req, res, dbUser, method) {
+    const alreadySet = method === 'sms' ? dbUser.sms_enabled : dbUser.totp_enabled;
+    if (!dbUser.is_enrolled && !alreadySet) return true;
+    return confirmCurrentPassword(req, res, method);
+}
+
+/**
  * GET /api/enrollment/questions
  * Get list of active security questions.
  */
@@ -210,8 +232,8 @@ async function setupTOTP(req, res) {
             });
         }
 
-        const current = await db.query('SELECT totp_enabled FROM users WHERE id = $1', [req.user.userId]);
-        if (current.rows[0]?.totp_enabled && !(await confirmCurrentPassword(req, res, 'totp'))) return;
+        const current = await db.query('SELECT is_enrolled, totp_enabled FROM users WHERE id = $1', [req.user.userId]);
+        if (!(await confirmFactorChange(req, res, current.rows[0] || {}, 'totp'))) return;
 
         const secret = totpService.generateSecret();
         const qrCodeDataUrl = await totpService.generateQRCode(secret, req.user.username);
@@ -344,15 +366,13 @@ async function setupSMS(req, res) {
         }
 
         const result = await db.query(
-            'SELECT sms_enabled, mobile_number, mobile_source FROM users WHERE id = $1',
+            'SELECT is_enrolled, sms_enabled, mobile_number, mobile_source FROM users WHERE id = $1',
             [req.user.userId]
         );
         const dbUser = result.rows[0] || {};
 
         const supplied = typeof req.body?.mobile === 'string' ? req.body.mobile.trim() : '';
-        // A new number is as sensitive as a new authenticator: it must not be swapped in from a stolen session
-        const needsReauth = dbUser.sms_enabled || (supplied && dbUser.mobile_source === 'portal');
-        if (needsReauth && !(await confirmCurrentPassword(req, res, 'sms'))) return;
+        if (!(await confirmFactorChange(req, res, dbUser, 'sms'))) return;
 
         let target;
         if (supplied) {

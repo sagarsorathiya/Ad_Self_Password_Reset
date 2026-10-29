@@ -5,7 +5,7 @@ process.env.SMS_API_URL = 'https://sms.example.test/send?to={mobile_plain}&text=
 process.env.SMS_COUNTRY_CODE = '+91';
 process.env.PORTAL_NAME = 'Test Portal';
 
-const { startServer, resetState, login, DEFAULT_ANSWERS } = require('../helpers/setup');
+const { startServer, resetState, login, totpCode, DEFAULT_ANSWERS } = require('../helpers/setup');
 const { describe, test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -138,6 +138,63 @@ describe('SMS one-time codes', () => {
         // A 10-digit national number that happens to start with 91 is still prefixed
         assert.equal(mobileService.normalize('9187654321'), '+919187654321');
         assert.equal(mobileService.normalize('not a number'), null);
+    });
+
+    test('an enrolled user must prove their password before adding SMS to the account', async () => {
+        // Security review 2026-10-29: the guard used to be "is SMS already on", so a stolen session could
+        // bind an attacker's phone to an account enrolled with questions + TOTP and then reset its AD
+        // password from anywhere. Enrolment state, not the factor's own flag, decides.
+        const { token } = await login(api, NO_MOBILE.username, NO_MOBILE.password);
+        await saveQuestions(token);
+        const setup = await api('POST', '/api/enrollment/totp/setup', {}, token);
+        await api('POST', '/api/enrollment/totp/verify', { code: totpCode(setup.body.data.secret) }, token);
+
+        const status = (await api('GET', '/api/enrollment/status', undefined, token)).body.data;
+        assert.equal(status.isEnrolled, true);
+        assert.equal(status.smsEnabled, false, 'enrolled by questions + TOTP, no SMS yet');
+
+        const hijack = await api('POST', '/api/enrollment/sms/setup', { mobile: '+919999900001' }, token);
+        assert.equal(hijack.status, 401);
+        assert.equal(hijack.body.code, 'REAUTH_REQUIRED');
+        assert.equal(sent.length, 0, 'no code is texted to the supplied number');
+
+        const wrongPassword = await api('POST', '/api/enrollment/sms/setup', {
+            mobile: '+919999900001', currentPassword: 'not-the-password',
+        }, token);
+        assert.equal(wrongPassword.status, 401);
+        assert.equal(wrongPassword.body.code, 'REAUTH_FAILED');
+        assert.equal(sent.length, 0);
+
+        const allowed = await api('POST', '/api/enrollment/sms/setup', {
+            mobile: '+919999900001', currentPassword: NO_MOBILE.password,
+        }, token);
+        assert.equal(allowed.status, 200, allowed.body.message);
+        assert.equal(sent.length, 1, 'the owner, with their password, can still add it');
+    });
+
+    test('an enrolled user must prove their password before adding an authenticator', async () => {
+        // The mirror of the case above: enrolled by questions + SMS, so totp_enabled is false
+        const { token } = await enrollWithSms(WITH_MOBILE);
+
+        const hijack = await api('POST', '/api/enrollment/totp/setup', {}, token);
+        assert.equal(hijack.status, 401);
+        assert.equal(hijack.body.code, 'REAUTH_REQUIRED');
+
+        const allowed = await api('POST', '/api/enrollment/totp/setup', { currentPassword: WITH_MOBILE.password }, token);
+        assert.equal(allowed.status, 200, allowed.body.message);
+        assert.ok(allowed.body.data.secret);
+    });
+
+    test('first-time enrolment never asks for the password twice', async () => {
+        // Not enrolled = nothing to hijack, and the user typed their password at sign-in moments ago
+        const { token } = await login(api, NO_MOBILE.username, NO_MOBILE.password);
+        await saveQuestions(token);
+
+        const setup = await api('POST', '/api/enrollment/sms/setup', { mobile: '+919999900002' }, token);
+        assert.equal(setup.status, 200, setup.body.message);
+        const verify = await api('POST', '/api/enrollment/sms/verify', { code: lastCode() }, token);
+        assert.equal(verify.status, 200, verify.body.message);
+        assert.equal((await api('GET', '/api/enrollment/status', undefined, token)).body.data.isEnrolled, true);
     });
 
     test('rejects a wrong code, and kills the code after five attempts', async () => {
