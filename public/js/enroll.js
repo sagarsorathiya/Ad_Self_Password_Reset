@@ -147,8 +147,22 @@
         document.getElementById('replaceTotpBtn').textContent = status.totpEnabled
             ? 'Replace authenticator (new device)'
             : 'Set up an authenticator app';
-        document.getElementById('totpReauthGroup').classList.toggle('hidden', !status.totpEnabled);
+        document.getElementById('totpManageText').textContent = status.totpEnabled
+            ? 'Got a new phone or reinstalled your authenticator app? Link the new device here. '
+              + 'Your current device keeps working until the new one is verified.'
+            : 'Add an authenticator app as another way to confirm it is you.';
+        document.getElementById('totpReauthGroup').classList.toggle('hidden', !needsPassword(status.totpEnabled));
         showSection('manageView');
+    }
+
+    /**
+     * Whether a factor change has to be confirmed with the Windows password, mirroring
+     * confirmFactorChange() on the server: once you are enrolled, *adding* a factor counts too, not only
+     * replacing the one you have. Keep the two in step - when the field is hidden but the server asks for
+     * it, the button silently does nothing (production 2026-10-29).
+     */
+    function needsPassword(factorEnabled) {
+        return Boolean(status.isEnrolled || factorEnabled);
     }
 
     // The SMS card doubles as "set it up" and "change the number", so an enrolled user can add the
@@ -164,8 +178,7 @@
 
         setSmsCardText(status.mobile?.masked || '');
 
-        // Re-authentication is only required once a number of your own has been verified
-        document.getElementById('smsReauthGroup').classList.toggle('hidden', !status.smsEnabled);
+        document.getElementById('smsReauthGroup').classList.toggle('hidden', !needsPassword(status.smsEnabled));
         document.getElementById('smsManageBtn').textContent = status.smsEnabled
             ? 'Change mobile number'
             : 'Send a code to this number';
@@ -209,7 +222,8 @@
             return;
         }
         showSection('step2');
-        const ok = await showTotpSetup(true, pwInput.value);
+        // Only a replacement when one is already active; otherwise this is a first authenticator
+        const ok = await showTotpSetup(status.totpEnabled, pwInput.value);
         pwInput.value = '';
         if (!ok) showOverview();
     });
@@ -220,8 +234,9 @@
         setFieldError(pwInput, '');
         setFieldError(mobileInput, '');
 
-        // Changing a verified number is a factor change: prove the password first, like replacing a device
-        if (status.smsEnabled && !pwInput.value) {
+        // A factor change on an enrolled account is confirmed with the password, whether the number is
+        // new or replacing a verified one
+        if (needsPassword(status.smsEnabled) && !pwInput.value) {
             setFieldError(pwInput, 'Enter your current password to continue.');
             pwInput.focus();
             return;
