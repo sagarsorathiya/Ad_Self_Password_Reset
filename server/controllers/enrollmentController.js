@@ -406,12 +406,17 @@ async function setupSMS(req, res) {
             [target.source === 'portal' ? mobileService.encrypt(target.number) : null, target.source, req.user.userId]
         );
 
-        const { resendAfter } = await smsOtpService.issue({
+        const { resendAfter, gateway } = await smsOtpService.issue({
             userId: req.user.userId,
             purpose: 'enrollment',
             number: target.number,
             maskedNumber: masked,
         });
+
+        // Audited on the way out, not only when it fails: an enrolment that goes quiet is the common
+        // support call, and without this row there is nothing to show a code was ever sent.
+        await logAudit(req.user.userId, req.user.username, 'enrollment_sms', 'sms', req, true,
+            smsOtpService.sentDetail(masked, gateway));
 
         res.json({
             success: true,
@@ -433,7 +438,7 @@ async function setupSMS(req, res) {
             });
         }
         console.error('[Enrollment] SMS setup error:', err.message);
-        await logAudit(req.user.userId, req.user.username, 'enrollment', 'sms', req, false, `Code not sent: ${err.message}`);
+        await logAudit(req.user.userId, req.user.username, 'enrollment_sms', 'sms', req, false, `Code not sent: ${err.message}`);
         res.status(502).json({
             success: false,
             message: 'We could not send the text message. Please try again, or contact your administrator.',

@@ -65,8 +65,9 @@ async function issue({ userId, purpose, number, maskedNumber }) {
         [userId, purpose, await bcrypt.hash(code, BCRYPT_ROUNDS), maskedNumber || null, expiresAt]
     );
 
+    let gateway;
     try {
-        await smsService.send({ to: number, text: smsService.buildMessage(code, CODE_TTL_MINUTES) });
+        gateway = await smsService.send({ to: number, text: smsService.buildMessage(code, CODE_TTL_MINUTES) });
     } catch (err) {
         // Released like a reminder that failed to send: a code the user never received must not sit in the
         // way of the next attempt, neither as the "newest code" nor as a cooldown
@@ -74,7 +75,9 @@ async function issue({ userId, purpose, number, maskedNumber }) {
         throw err;
     }
 
-    return { expiresAt, resendAfter: RESEND_COOLDOWN_SECONDS };
+    // The gateway's own answer travels back so the caller can put it in the audit log: it carries the
+    // provider's message id, which is the only thing that lets you trace "I never got the code" with them.
+    return { expiresAt, resendAfter: RESEND_COOLDOWN_SECONDS, gateway: gateway?.response || '' };
 }
 
 /**
@@ -114,6 +117,15 @@ async function verify({ userId, purpose, code }) {
  * What to tell the user about a rejected code. Says enough to act on ("ask for a new one") without
  * confirming to a stranger that the account or an outstanding code exists.
  */
+/**
+ * Audit detail for a code that went out: the masked number, plus the gateway's reply when it gave one.
+ * @param {string} maskedNumber
+ * @param {string} gateway - `gateway` from issue()
+ */
+function sentDetail(maskedNumber, gateway) {
+    return `Code sent to ${maskedNumber}${gateway ? ` - gateway: ${gateway}` : ''}`;
+}
+
 function codeErrorMessage(reason) {
     return {
         none: 'That code is no longer valid. Please request a new one.',
@@ -137,6 +149,7 @@ module.exports = {
     issue,
     verify,
     codeErrorMessage,
+    sentDetail,
     clear,
     purgeExpired,
     cooldownRemaining,

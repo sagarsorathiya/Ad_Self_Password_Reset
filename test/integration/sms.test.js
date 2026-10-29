@@ -215,6 +215,39 @@ describe('SMS one-time codes', () => {
         assert.match(dead.body.message, /request a new one/);
     });
 
+    test('every code that goes out is audited, with the gateway reply', async () => {
+        // Production 2026-10-29: enrolment logged only the verification, so a code that was sent but never
+        // arrived left no trace at all, and neither send recorded the provider's message id.
+        await enrollWithSms(WITH_MOBILE);
+        const enrolSend = await db.query(
+            "SELECT success, details FROM audit_log WHERE action = 'enrollment_sms' AND username = $1",
+            [WITH_MOBILE.username]
+        );
+        assert.equal(enrolSend.rows.length, 1);
+        assert.equal(enrolSend.rows[0].success, true);
+        assert.match(enrolSend.rows[0].details, /^Code sent to \+91 .* 01 - gateway: queued$/);
+
+        await api('POST', '/api/password/reset/send-sms', { username: WITH_MOBILE.username });
+        const resetSend = await db.query(
+            "SELECT details FROM audit_log WHERE action = 'password_reset_sms' AND username = $1",
+            [WITH_MOBILE.username]
+        );
+        assert.equal(resetSend.rows.length, 1);
+        assert.match(resetSend.rows[0].details, /gateway: queued$/);
+
+        // A send that fails is still audited, under the same action
+        failSending = true;
+        await clearCooldown(WITH_MOBILE.username);
+        const { token } = await login(api, WITH_MOBILE.username, WITH_MOBILE.password);
+        await api('POST', '/api/enrollment/sms/setup', { currentPassword: WITH_MOBILE.password }, token);
+        const failed = await db.query(
+            "SELECT success, details FROM audit_log WHERE action = 'enrollment_sms' AND success = FALSE AND username = $1",
+            [WITH_MOBILE.username]
+        );
+        assert.equal(failed.rows.length, 1);
+        assert.match(failed.rows[0].details, /^Code not sent: /);
+    });
+
     test('a code works only once', async () => {
         const { token } = await enrollWithSms(WITH_MOBILE);
         const code = lastCode();

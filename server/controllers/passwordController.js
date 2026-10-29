@@ -575,13 +575,14 @@ async function sendResetSMS(req, res) {
         if (!mobile) return decoy();
 
         const masked = mobileService.mask(mobile.number);
-        const { resendAfter } = await smsOtpService.issue({
+        const { resendAfter, gateway } = await smsOtpService.issue({
             userId: dbUser.id,
             purpose: 'reset',
             number: mobile.number,
             maskedNumber: masked,
         });
-        await logAudit(dbUser.id, username, 'password_reset_sms', 'sms', req, true, `Code sent to ${masked}`);
+        await logAudit(dbUser.id, username, 'password_reset_sms', 'sms', req, true,
+            smsOtpService.sentDetail(masked, gateway));
 
         res.json({
             success: true,
