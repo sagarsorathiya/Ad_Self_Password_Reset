@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 132 automated tests (`node:test`)
+- Tests: 135 automated tests (`node:test`)
 
 ---
 
@@ -414,7 +414,8 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 5. **Security Settings** (shown in the navigation bar once you've enrolled):
    - **Update questions or answers:** your current questions are pre-selected. Answers are stored as one-way hashes and can't be shown to anyone, so leave an answer blank to keep it, or type a new one.
    - **Replace authenticator (new device):** scan the new QR code and enter a code from the new device. Your old device keeps working until the new one is verified, then stops working.
-   - **Text message (SMS):** shows the number codes go to, and lets you switch to a new one. Codes keep going to the old number until you enter a code sent to the new one. Changing it asks for your current Windows password.
+   - **Text message (SMS):** shows the number codes go to, and lets you switch to a new one. Codes keep going to the old number until you enter a code sent to the new one.
+   - Once you have finished enrollment, **any** change here asks for your current Windows password — including *adding* the second method you didn't set up originally. That is deliberate: it stops someone who gets hold of your signed-in browser from pointing password recovery at their own phone or authenticator.
 6. **Emails** (if your organization turned them on): after every password change or reset you get an email with the time, IP address and browser. If you didn't make the change, contact IT immediately. Before your password expires you get reminders (by default 14, 7, 3 and 1 days before). Change your password in the portal when you get one.
 7. **Password rules:** at least 8 characters, with 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username, and your domain policy may block recently used passwords.
 
@@ -448,7 +449,7 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 | Weak security questions | `RESET_POLICY=both` (default) requires questions **and** a one-time code (authenticator or SMS). The questions step only yields a 5-minute step token bound to that user, which is useless as a session or reset token. |
 | Secrets in config files | `.env` secrets DPAPI-encrypted (`protect-secret.ps1`); PFX private key protected by a random DPAPI-encrypted passphrase and git-ignored |
 | Over-privileged service account | Least-privilege account script; startup detects `adminCount=1` accounts (warning in development, refusal in production) |
-| Stolen session | 15-min access tokens; refresh tokens revoked on logout and on admin lock (`token_version`) |
+| Stolen session | 15-min access tokens; refresh tokens revoked on logout and on admin lock (`token_version`). A session alone cannot change the password (the current one is required) and cannot **add or replace a recovery factor** on an enrolled account: security answers, authenticator and mobile number all require `currentPassword`, checked against AD. Gating on the account's enrollment state rather than on the individual factor is what stops a session being converted into a lasting takeover via a factor the attacker controls. |
 | Stale admin rights | Portal-granted admin rights are re-checked in the database on every admin request, so removing them or locking the user applies immediately; every grant and removal is audited |
 | Token misuse | Access, refresh and reset tokens are typed; only `access` tokens open a session; algorithm pinned to HS256 |
 | Factor takeover via a stolen session | Changing existing security answers or replacing the authenticator requires the current AD password (rate-limited) |
@@ -475,9 +476,9 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | GET | `/api/enrollment/questions` | user | – |
 | GET | `/api/enrollment/security-questions` | user | – → current `[{ questionId, questionText }]` (no answers) |
 | POST | `/api/enrollment/security-questions` | user | `{ answers: [{ questionId, answer }] ×3, currentPassword? }`. An empty `answer` keeps the saved one; `currentPassword` is required once questions exist. |
-| POST | `/api/enrollment/totp/setup` | user | `{ currentPassword? }` (required when an authenticator is already active) → `{ qrCode, secret }` (staged as pending; the current device stays active) |
+| POST | `/api/enrollment/totp/setup` | user | `{ currentPassword? }` (required once the user is enrolled, or an authenticator is already active) → `{ qrCode, secret }` (staged as pending; the current device stays active) |
 | POST | `/api/enrollment/totp/verify` | user | `{ code }` from the new device; activates it and retires the old one |
-| POST | `/api/enrollment/sms/setup` | user | `{ mobile?, currentPassword? }` → `{ mobileMasked, source, resendAfter }`. `mobile` only when AD has no number (400 `MOBILE_REQUIRED`); `currentPassword` once SMS is active. |
+| POST | `/api/enrollment/sms/setup` | user | `{ mobile?, currentPassword? }` → `{ mobileMasked, source, resendAfter }`. `mobile` only when AD has no number (400 `MOBILE_REQUIRED`); `currentPassword` once the user is enrolled, or SMS is already active (401 `REAUTH_REQUIRED`). |
 | POST | `/api/enrollment/sms/verify` | user | `{ code }` from the text message; stores the number and enables SMS |
 | GET | `/api/enrollment/status` | user | – |
 | POST | `/api/password/change` | user | `{ currentPassword, newPassword, confirmPassword }`. Enrolled users only; otherwise 403 with `code: 'ENROLLMENT_REQUIRED'`. |
@@ -509,7 +510,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (132 tests)
+npm test                   # everything (135 tests)
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
