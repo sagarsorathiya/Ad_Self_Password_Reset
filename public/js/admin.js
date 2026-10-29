@@ -274,17 +274,35 @@
         }
         auditBody.innerHTML = logs.map((l) => `
             <tr>
-                <td>${escapeHtml(formatDate(l.created_at))}</td>
+                <td class="cell-time">${escapeHtml(formatDate(l.created_at))}</td>
                 <td>${escapeHtml(l.username)}</td>
-                <td>${escapeHtml(humanize(l.action))}</td>
-                <td>${escapeHtml(l.method ? humanize(l.method) : '—')}</td>
+                <td>${escapeHtml(actionLabel(l.action))}</td>
+                <td>${escapeHtml(methodLabel(l.method))}</td>
                 <td>${l.success
                     ? '<span class="badge badge-success">Success</span>'
                     : '<span class="badge badge-error">Failed</span>'}</td>
                 <td>${escapeHtml(l.ip_address || '—')}</td>
-                <td style="white-space: normal; max-width: 320px;">${escapeHtml(l.details || '')}</td>
+                <td class="cell-details">${detailsCell(l.details)}</td>
             </tr>`).join('');
     }
+
+    // Long values stay readable: the row shows a shortened line, clicking reveals the stored text
+    function detailsCell(details) {
+        if (!details) return '<span class="text-muted">—</span>';
+        const short = shortDetails(details);
+        if (short === details && details.length <= 90) return `<div class="detail-text">${escapeHtml(details)}</div>`;
+        return `
+            <div class="detail-text clickable" title="Click to show the full entry">
+                <span class="detail-short">${escapeHtml(short)}<span class="detail-more">more</span></span>
+                <span class="detail-full">${escapeHtml(details)}</span>
+            </div>`;
+    }
+
+    // One listener for the whole table; rows are replaced on every page
+    auditBody.addEventListener('click', (e) => {
+        const cell = e.target.closest('.detail-text.clickable');
+        if (cell) cell.classList.toggle('expanded');
+    });
 
     // ---- Security questions ----
 
@@ -680,6 +698,62 @@
 
     function humanize(value) {
         return String(value).replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+    }
+
+    // Wording for the audit table. Anything missing falls back to humanize(), so a new action still reads.
+    const ACTION_LABELS = {
+        login: 'Login',
+        logout: 'Logout',
+        password_change: 'Password change',
+        password_reset: 'Password reset',
+        password_reset_verify: 'Reset verification',
+        password_reset_sms: 'Reset code sent by SMS',
+        enrollment: 'Enrollment',
+        enrollment_sms: 'Setup code sent by SMS',
+        enrollment_reset: 'Enrollment reset',
+        totp_replaced: 'Authenticator replaced',
+        sms_replaced: 'Mobile number changed',
+        reauth: 'Password re-check',
+        password_sync: 'Second-domain sync',
+        notification: 'Alert mail',
+        password_reminder: 'Expiry reminder mail',
+        settings_updated: 'Settings changed',
+        mail_test: 'Test mail',
+        sms_test: 'Test SMS',
+        reminder_run: 'Manual reminder run',
+        user_locked: 'User locked',
+        user_unlocked: 'User unlocked',
+        admin_granted: 'Admin granted',
+        admin_revoked: 'Admin removed',
+    };
+
+    const METHOD_LABELS = {
+        sms: 'SMS',
+        totp: 'Authenticator',
+        security_questions: 'Security questions',
+        'security_questions+totp': 'Questions + authenticator',
+        'security_questions+sms': 'Questions + SMS',
+        authenticated: 'Signed in',
+        enrollment_reminder: 'Enrollment reminder',
+    };
+
+    const actionLabel = (value) => ACTION_LABELS[value] || humanize(value);
+    const methodLabel = (value) => (value ? METHOD_LABELS[value] || humanize(value) : '—');
+
+    /**
+     * A gateway reply is logged in full so a message can be traced with the provider, but the raw JSON
+     * swamps the table. Show the provider's id; the untouched text stays one click away.
+     */
+    function shortDetails(text) {
+        const parts = /^([\s\S]*?) - gateway: ([\s\S]*)$/.exec(text);
+        if (!parts) return text;
+        try {
+            const id = JSON.parse(parts[2])?.data?.[0]?.uniqueid;
+            if (id) return `${parts[1]} (gateway id ${id})`;
+        } catch {
+            // Not JSON, or a shape we don't know: leave it alone and let the cell expand
+        }
+        return text;
     }
 
 

@@ -468,6 +468,31 @@ textarea.form-input { height: auto; min-height: 80px; padding: var(--space-2) va
 .data-table tbody tr:hover { background: var(--color-surface-hover); }
 .data-table tbody tr:last-child td { border-bottom: none; }
 
+/* Audit log: the time reads as one unit, and details must wrap instead of stretching the table.
+   A long value (gateway reply, LDAP error) is shortened to two lines and expands on click. */
+.data-table td.cell-time { font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
+.data-table td.cell-details { white-space: normal; max-width: 420px; }
+
+.detail-text {
+    font-size: var(--font-size-sm);
+    line-height: 1.45;
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+}
+.detail-text.clickable { cursor: pointer; }
+.detail-text.clickable:hover { color: var(--color-text); }
+.detail-text.clickable:hover .detail-more { text-decoration: underline; }
+
+.detail-more {
+    margin-left: var(--space-2);
+    font-weight: 600;
+    color: var(--color-primary);
+    white-space: nowrap;
+}
+.detail-full { display: none; }
+.detail-text.expanded .detail-short { display: none; }
+.detail-text.expanded .detail-full { display: inline; }
+
 /* --- Badges --- */
 .badge {
     display: inline-flex;
