@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireActiveSession } = require('../middleware/auth');
+const { enrollLimiter } = require('../middleware/rateLimiter');
 const { requireAdmin } = require('../middleware/admin');
 
 // All admin routes require authentication + admin role
-router.use(authenticate, requireAdmin);
+router.use(authenticate, requireActiveSession, requireAdmin);
 
 // Users management
 router.get('/users', adminController.getUsers);
@@ -33,7 +34,8 @@ router.delete('/password-exceptions/:id', adminController.deletePasswordExceptio
 
 // Mail, SMS and expiry reminder settings
 router.get('/settings', adminController.getSettings);
-router.put('/settings', adminController.updateSettings);
+// Rate-limited: saving a protected setting checks the admin's Windows password
+router.put('/settings', enrollLimiter, adminController.updateSettings);
 router.post('/settings/test-mail', adminController.sendTestMail);
 router.post('/settings/test-sms', adminController.sendTestSMS);
 router.post('/reminders/run', adminController.runReminders);

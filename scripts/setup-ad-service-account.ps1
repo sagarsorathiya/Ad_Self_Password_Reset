@@ -8,7 +8,7 @@
       cannot change password; interactive logon should be denied by GPO).
     - Creates group <AdminGroupName> in <GroupOU> (add help-desk staff to it).
     - Delegates on <TargetOU> for descendant user objects:
-        Reset Password (extended right), Read/Write pwdLastSet, Read lockoutTime.
+        Reset Password (extended right), Read/Write pwdLastSet, Read/Write lockoutTime (unlock after a reset).
       Protected accounts (adminCount=1, e.g. Domain Admins) are excluded by AdminSDHolder by design.
     - Prints the new password ONCE, encrypted for .env if you pass -WriteEnv.
 
@@ -73,7 +73,8 @@ if (-not [ADSI]::Exists("LDAP://$groupDN")) {
 $principal = "$netbios\$AccountName"
 & dsacls.exe $TargetOU /I:S /G "${principal}:CA;Reset Password;user" | Out-Null
 & dsacls.exe $TargetOU /I:S /G "${principal}:RPWP;pwdLastSet;user" | Out-Null
-& dsacls.exe $TargetOU /I:S /G "${principal}:RP;lockoutTime;user" | Out-Null
+# Write too: a self-service reset also clears an AD lockout
+& dsacls.exe $TargetOU /I:S /G "${principal}:RPWP;lockoutTime;user" | Out-Null
 Write-Host "Delegated Reset Password / pwdLastSet / lockoutTime on $TargetOU to $principal"
 
 Write-Host ''

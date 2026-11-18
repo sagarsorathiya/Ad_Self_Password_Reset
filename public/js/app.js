@@ -5,6 +5,9 @@
 const TOKEN_KEY = 'sspr_token';
 const REFRESH_KEY = 'sspr_refresh';
 const USER_KEY = 'sspr_user';
+const ACTIVITY_KEY = 'sspr_last_activity';
+// Signed-in pages sign out after this long without a click, key press or request
+const IDLE_LIMIT_MS = 30 * 60 * 1000;
 
 // ---- Token storage ----
 
@@ -21,6 +24,32 @@ function clearToken() {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_KEY);
     localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(ACTIVITY_KEY);
+}
+
+// ---- Idle sign-out ----
+
+function markActivity() {
+    if (getToken()) localStorage.setItem(ACTIVITY_KEY, String(Date.now()));
+}
+
+// Shared by all tabs through localStorage, so activity in one tab keeps the others signed in
+function idleTooLong() {
+    const last = parseInt(localStorage.getItem(ACTIVITY_KEY), 10);
+    return Boolean(getToken()) && Number.isFinite(last) && Date.now() - last > IDLE_LIMIT_MS;
+}
+
+function startIdleWatch() {
+    if (idleTooLong()) {
+        clearToken();
+        window.location.href = '/index.html?idle=1';
+        return;
+    }
+    markActivity();
+    ['click', 'keydown'].forEach((type) => document.addEventListener(type, markActivity, { passive: true }));
+    setInterval(() => {
+        if (idleTooLong()) logout('/index.html?idle=1');
+    }, 60 * 1000);
 }
 
 function getCachedUser() {
@@ -91,6 +120,15 @@ async function api(method, url, body, { retry = true } = {}) {
 
     const json = await res.json().catch(() => ({}));
 
+    if (res.ok) markActivity();
+
+    // Logout elsewhere, an admin lock or a password change ended this session
+    if (res.status === 401 && json.code === 'SESSION_REVOKED') {
+        clearToken();
+        window.location.href = '/index.html?revoked=1';
+        throw new ApiError(json.message, 401, 'SESSION_EXPIRED');
+    }
+
     if (res.status === 401 && json.code === 'TOKEN_EXPIRED' && retry) {
         if (await refreshAccessToken()) {
             return api(method, url, body, { retry: false });
@@ -130,6 +168,7 @@ function redirectIfNotEnrolled(user) {
 // Loads the current user from the server; redirects to login on failure.
 async function loadCurrentUser() {
     if (redirectIfNotAuthenticated()) return null;
+    startIdleWatch();
     try {
         const { data } = await api('GET', '/api/auth/me');
         setCachedUser(data);
@@ -143,19 +182,17 @@ async function loadCurrentUser() {
     }
 }
 
-async function logout() {
+async function logout(target = '/index.html') {
     try {
         await api('POST', '/api/auth/logout', {}, { retry: false });
     } catch {
         // Logout is client-side; ignore server errors
     }
     clearToken();
-    window.location.href = '/index.html';
+    window.location.href = typeof target === 'string' ? target : '/index.html';
 }
 
 // ---- Toast notifications ----
-
-const TOAST_ICONS = { success: '✅', error: '⛔', warning: '⚠️', info: 'ℹ️' };
 
 function showToast(message, type = 'info', duration = 5000) {
     let container = document.querySelector('.toast-container');
@@ -170,10 +207,6 @@ function showToast(message, type = 'info', duration = 5000) {
     toast.className = `toast toast-${type}`;
     toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
 
-    const icon = document.createElement('span');
-    icon.className = 'toast-icon';
-    icon.textContent = TOAST_ICONS[type] || TOAST_ICONS.info;
-
     const msg = document.createElement('div');
     msg.className = 'toast-message';
     msg.textContent = message;
@@ -183,7 +216,7 @@ function showToast(message, type = 'info', duration = 5000) {
     close.setAttribute('aria-label', 'Dismiss');
     close.textContent = '×';
 
-    toast.append(icon, msg, close);
+    toast.append(msg, close);
     container.appendChild(toast);
 
     const remove = () => {
@@ -265,23 +298,56 @@ function initPasswordToggles(root = document) {
     });
 }
 
-// ---- Password strength ----
+// ---- Password rules and strength ----
 
-function getPasswordChecks(password) {
+// What the server checks (GET /api/password/rules); defaults until it has answered
+let passwordRules = { minLength: 8, complexity: true };
+
+async function loadPasswordRules() {
+    try {
+        const res = await fetch('/api/password/rules', { headers: { Accept: 'application/json' } });
+        const json = await res.json();
+        if (res.ok && json.success) passwordRules = json.data;
+    } catch {
+        // Keep the defaults; the server checks the password anyway
+    }
+    return passwordRules;
+}
+
+// AD complexity also refuses the account name (3+ characters) and any display-name part of 3+ characters
+function containsIdentity(password, identity = {}) {
+    const lower = password.toLowerCase();
+    const name = String(identity.username || '').toLowerCase();
+    if (name.length >= 3 && lower.includes(name)) return true;
+    return String(identity.displayName || '')
+        .split(/[,.\-_#\t ]+/)
+        .some((part) => part.length >= 3 && lower.includes(part.toLowerCase()));
+}
+
+function getPasswordChecks(password, identity) {
     return {
-        length: password.length >= 8,
+        length: password.length >= passwordRules.minLength,
         lower: /[a-z]/.test(password),
         upper: /[A-Z]/.test(password),
         digit: /\d/.test(password),
         symbol: /[^A-Za-z0-9]/.test(password),
+        noname: password.length > 0 && !containsIdentity(password, identity),
     };
 }
 
-// AD default complexity: 3 of 4 character categories + minimum length
-function meetsComplexity(password) {
-    const c = getPasswordChecks(password);
+// Minimum length, plus 3 of 4 character categories when the domain has complexity on
+function meetsComplexity(password, identity) {
+    const c = getPasswordChecks(password, identity);
     const categories = [c.lower, c.upper, c.digit, c.symbol].filter(Boolean).length;
-    return c.length && categories >= 3;
+    if (!c.length) return false;
+    if (!passwordRules.complexity) return true;
+    return categories >= 3 && c.noname;
+}
+
+// "At least N characters" in a requirements list, from the server's rule
+function renderLengthRule(reqList) {
+    const item = reqList?.querySelector('[data-req="length"]');
+    if (item) item.textContent = `At least ${passwordRules.minLength} characters`;
 }
 
 function evaluatePasswordStrength(password) {
@@ -299,7 +365,8 @@ function evaluatePasswordStrength(password) {
 }
 
 // Wires a password input to a strength meter and optional requirements list.
-function bindPasswordStrength(input, meterRoot, reqList) {
+// identity: () => ({ username, displayName }) for the "does not contain your name" rule
+function bindPasswordStrength(input, meterRoot, reqList, identity = () => ({})) {
     const fill = meterRoot.querySelector('.strength-fill');
     const text = meterRoot.querySelector('.strength-text');
     const update = () => {
@@ -307,13 +374,22 @@ function bindPasswordStrength(input, meterRoot, reqList) {
         fill.className = `strength-fill ${level}`;
         text.textContent = label ? `Strength: ${label}` : '';
         if (reqList) {
-            const checks = getPasswordChecks(input.value);
+            const checks = getPasswordChecks(input.value, identity());
             reqList.querySelectorAll('[data-req]').forEach((li) => {
                 li.classList.toggle('met', Boolean(checks[li.dataset.req]));
             });
         }
     };
     input.addEventListener('input', update);
+    loadPasswordRules().then(() => {
+        renderLengthRule(reqList);
+        // The complexity items only matter when the domain enforces them
+        reqList?.querySelectorAll('[data-req="lower"], [data-req="upper"], [data-req="digit"], [data-req="symbol"]')
+            .forEach((li) => li.classList.toggle('hidden', !passwordRules.complexity));
+        document.querySelectorAll('[data-complexity-only]')
+            .forEach((el) => el.classList.toggle('hidden', !passwordRules.complexity));
+        update();
+    });
     update();
 }
 

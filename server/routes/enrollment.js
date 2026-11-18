@@ -1,11 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const enrollmentController = require('../controllers/enrollmentController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireActiveSession } = require('../middleware/auth');
 const { verifyLimiter, enrollLimiter, smsLimiter } = require('../middleware/rateLimiter');
 
 // All enrollment routes require authentication
-router.use(authenticate);
+router.use(authenticate, requireActiveSession);
 
 // GET /api/enrollment/questions
 router.get('/questions', enrollmentController.getQuestions);

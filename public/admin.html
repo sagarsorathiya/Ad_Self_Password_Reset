@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin — AD Password Portal</title>
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20261029c">
+    <link rel="stylesheet" href="/css/styles.css?v=20261118">
 </head>
 <body>
     <div class="app-container">
@@ -18,23 +18,23 @@
             </div>
 
             <div class="stats-grid fade-in">
-                <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-value" id="statTotal">–</div><div class="stat-label">Total Users</div></div>
-                <div class="stat-card"><div class="stat-icon">✅</div><div class="stat-value" id="statEnrolled">–</div><div class="stat-label">Enrolled</div></div>
-                <div class="stat-card"><div class="stat-icon">⏳</div><div class="stat-value" id="statPending">–</div><div class="stat-label">Pending Enrollment</div></div>
-                <div class="stat-card"><div class="stat-icon">🔒</div><div class="stat-value" id="statLocked">–</div><div class="stat-label">Locked</div></div>
+                <div class="stat-card"><div class="stat-value" id="statTotal">–</div><div class="stat-label">Total Users</div></div>
+                <div class="stat-card"><div class="stat-value" id="statEnrolled">–</div><div class="stat-label">Enrolled</div></div>
+                <div class="stat-card"><div class="stat-value" id="statPending">–</div><div class="stat-label">Pending Enrollment</div></div>
+                <div class="stat-card"><div class="stat-value" id="statLocked">–</div><div class="stat-label">Locked</div></div>
             </div>
 
-            <div class="filter-tabs mb-6" role="tablist" id="mainTabs" style="display: inline-flex;">
-                <button class="filter-tab active" role="tab" data-tab="users">Users</button>
-                <button class="filter-tab" role="tab" data-tab="audit">Audit Log</button>
-                <button class="filter-tab" role="tab" data-tab="questions">Security Questions</button>
-                <button class="filter-tab" role="tab" data-tab="exceptions">Password Exceptions</button>
-                <button class="filter-tab" role="tab" data-tab="verification">Verification</button>
-                <button class="filter-tab" role="tab" data-tab="mail">Mail &amp; Reminders</button>
+            <div class="filter-tabs mb-6 inline-flex" role="tablist" id="mainTabs" aria-label="Administration sections">
+                <button type="button" class="filter-tab active" role="tab" id="tabbtn-users" aria-controls="tab-users" aria-selected="true" tabindex="0" data-tab="users">Users</button>
+                <button type="button" class="filter-tab" role="tab" id="tabbtn-audit" aria-controls="tab-audit" aria-selected="false" tabindex="-1" data-tab="audit">Audit Log</button>
+                <button type="button" class="filter-tab" role="tab" id="tabbtn-questions" aria-controls="tab-questions" aria-selected="false" tabindex="-1" data-tab="questions">Security Questions</button>
+                <button type="button" class="filter-tab" role="tab" id="tabbtn-exceptions" aria-controls="tab-exceptions" aria-selected="false" tabindex="-1" data-tab="exceptions">Password Exceptions</button>
+                <button type="button" class="filter-tab" role="tab" id="tabbtn-verification" aria-controls="tab-verification" aria-selected="false" tabindex="-1" data-tab="verification">Verification</button>
+                <button type="button" class="filter-tab" role="tab" id="tabbtn-mail" aria-controls="tab-mail" aria-selected="false" tabindex="-1" data-tab="mail">Mail &amp; Reminders</button>
             </div>
 
             <!-- Users -->
-            <section id="tab-users">
+            <section id="tab-users" role="tabpanel" aria-labelledby="tabbtn-users">
                 <div class="toolbar">
                     <div class="toolbar-left">
                         <input class="form-input toolbar-search" type="search" id="userSearch" placeholder="Search name, username, email" maxlength="100">
@@ -46,7 +46,14 @@
                             <button class="filter-tab" data-filter="admins">Portal Admins</button>
                         </div>
                     </div>
-                    <button type="button" class="btn btn-primary btn-sm" id="addAdminBtn">+ Add Admin</button>
+                    <div class="toolbar-left">
+                        <label class="sr-only" for="userSort">Sort users</label>
+                        <select class="form-select w-auto" id="userSort">
+                            <option value="created">Newest first</option>
+                            <option value="activity">Recent activity first</option>
+                        </select>
+                        <button type="button" class="btn btn-primary btn-sm" id="addAdminBtn">+ Add Admin</button>
+                    </div>
                 </div>
                 <div class="table-container">
                     <table class="data-table users-table">
@@ -69,11 +76,26 @@
             </section>
 
             <!-- Audit log -->
-            <section id="tab-audit" class="hidden">
+            <section id="tab-audit" role="tabpanel" aria-labelledby="tabbtn-audit" class="hidden">
+                <form class="card card-full mb-6" id="retentionForm" novalidate>
+                    <h2 class="settings-title">Retention</h2>
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="auditRetention">Keep audit entries for (days)</label>
+                            <input class="form-input" type="number" id="auditRetention" min="0" max="3650" step="1">
+                            <div class="form-hint">0 = keep forever. At least 30 days otherwise. Older entries are
+                                deleted every hour, so take a database backup before setting this the first time.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="retentionSaveBtn">Save</label>
+                            <button type="submit" class="btn btn-primary" id="retentionSaveBtn">Save Retention</button>
+                        </div>
+                    </div>
+                </form>
                 <form class="toolbar" id="auditFilters">
                     <div class="toolbar-left">
                         <input class="form-input toolbar-search" type="text" id="auditUsername" placeholder="Username (partial)" maxlength="100">
-                        <select class="form-select" id="auditAction" style="width: auto;">
+                        <select class="form-select w-auto" id="auditAction" aria-label="Action">
                             <option value="">All actions</option>
                             <option value="login">Login</option>
                             <option value="logout">Logout</option>
@@ -102,9 +124,14 @@
                             <option value="sms_test">Test SMS</option>
                             <option value="mail_test">Test mail</option>
                             <option value="reminder_run">Manual reminder run</option>
+                            <option value="reset_policy_changed">Reset policy changed</option>
+                            <option value="reauth">Password re-check</option>
+                            <option value="session_revoked">Session ended (AD account)</option>
+                            <option value="account_unlock">Account unlocked</option>
+                            <option value="sms_limit">SMS limit reached</option>
                         </select>
-                        <input class="form-input" type="date" id="auditStart" aria-label="Start date" style="width: auto;">
-                        <input class="form-input" type="date" id="auditEnd" aria-label="End date" style="width: auto;">
+                        <input class="form-input w-auto" type="date" id="auditStart" aria-label="Start date">
+                        <input class="form-input w-auto" type="date" id="auditEnd" aria-label="End date">
                     </div>
                     <div class="toolbar-left">
                         <button type="reset" class="btn btn-ghost btn-sm">Clear</button>
@@ -131,7 +158,7 @@
             </section>
 
             <!-- Security questions -->
-            <section id="tab-questions" class="hidden">
+            <section id="tab-questions" role="tabpanel" aria-labelledby="tabbtn-questions" class="hidden">
                 <div class="card card-full mb-6">
                     <h2 class="settings-title">Questions per user</h2>
                     <div class="settings-grid">
@@ -162,6 +189,7 @@
                             <tr>
                                 <th>Order</th>
                                 <th>Question</th>
+                                <th>In use</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
@@ -172,7 +200,7 @@
             </section>
 
             <!-- Password exceptions -->
-            <section id="tab-exceptions" class="hidden">
+            <section id="tab-exceptions" role="tabpanel" aria-labelledby="tabbtn-exceptions" class="hidden">
                 <div class="toolbar">
                     <p class="text-sm text-muted">New passwords (change and reset) are rejected if they contain or equal an active entry. Matching ignores case and common look-alikes such as @ for a or 0 for o. These rules apply in addition to the domain password policy.</p>
                     <button type="button" class="btn btn-primary btn-sm" id="addExceptionBtn">+ Add Exception</button>
@@ -196,12 +224,75 @@
 
             <!-- Mail and expiry reminders -->
             <!-- Second factors and the SMS gateway -->
-            <section id="tab-verification" class="hidden">
+            <section id="tab-verification" role="tabpanel" aria-labelledby="tabbtn-verification" class="hidden">
                 <p class="text-sm text-muted mb-4">
-                    Which second factor users can set up, and how text messages are sent. Changes apply immediately
+                    What users must prove to reset their password, the sign-in and reset rules, which second factor
+                    users can set up, and how text messages are sent. Changes apply immediately
                     and override the server's .env file once saved. Users who already hold a factor you switch off
                     keep it, but can no longer use it to reset their password.
                 </p>
+
+                <form class="card card-full mb-6" id="policyForm" novalidate>
+                    <h2 class="settings-title">Password reset verification</h2>
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="resetPolicy">What users must prove</label>
+                            <select class="form-select" id="resetPolicy">
+                                <option value="both">Security questions AND a one-time code (strongest)</option>
+                                <option value="either">Security questions OR a one-time code</option>
+                                <option value="totp_only">A one-time code only (authenticator or SMS)</option>
+                            </select>
+                            <div class="form-hint" id="policyHint"></div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="policyCurrentPassword">Your Windows password</label>
+                            <div class="password-wrapper">
+                                <input class="form-input" type="password" id="policyCurrentPassword" autocomplete="current-password" maxlength="256">
+                                <button type="button" class="password-toggle" aria-label="Show password">Show</button>
+                            </div>
+                            <div class="form-error"></div>
+                            <div class="form-hint">Only members of the directory admin group can change the policy.</div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="policySaveBtn">Save Policy</button>
+                </form>
+
+                <form class="card card-full mb-6" id="rulesForm" novalidate>
+                    <h2 class="settings-title">Sign-in and reset rules</h2>
+                    <div class="settings-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="hideAccountState">Account state on sign-in and reset</label>
+                            <select class="form-select" id="hideAccountState">
+                                <option value="false">Explain the problem (disabled, locked, expired, not enrolled)</option>
+                                <option value="true">Hide it (nobody can tell which accounts exist or are enrolled)</option>
+                            </select>
+                            <div class="form-hint">Hiding it means users see every method the policy allows, even ones
+                                they never set up, and a text they never enrolled for does not arrive.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="pwMinLength">Minimum password length</label>
+                            <input class="form-input" type="number" id="pwMinLength" min="8" max="128" step="1">
+                            <div class="form-hint">Set it to the domain policy's minimum, so users see the rule first.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="pwComplexity">Complexity</label>
+                            <select class="form-select" id="pwComplexity">
+                                <option value="true">3 of 4 character types (domain complexity on)</option>
+                                <option value="false">No character-type rule (domain complexity off)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="lockAttempts">Failed reset attempts before a pause</label>
+                            <input class="form-input" type="number" id="lockAttempts" min="3" max="20" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="lockMinutes">Pause length (minutes)</label>
+                            <input class="form-input" type="number" id="lockMinutes" min="5" max="1440" step="1">
+                            <div class="form-hint">Self-service reset only; AD's own lockout is separate.</div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="rulesSaveBtn">Save Rules</button>
+                </form>
 
                 <form id="factorForm" novalidate>
                     <div class="card card-full mb-6">
@@ -241,7 +332,7 @@
                                 <label class="form-label" for="smsUrl">Gateway URL</label>
                                 <input class="form-input" type="text" id="smsUrl" maxlength="1000" autocomplete="off"
                                        placeholder="https://sms.example.com/api/send?to={mobile_plain}&amp;text={message}">
-                                <div class="form-hint">Empty = SMS codes cannot be switched on.</div>
+                                <div class="form-hint" id="smsUrlHint">Empty = SMS codes cannot be switched on.</div>
                             </div>
                             <div class="form-group">
                                 <label class="form-label" for="smsMethod">Request method</label>
@@ -273,6 +364,15 @@
                                 <input class="form-input" type="text" id="smsSuccessText" maxlength="100" autocomplete="off">
                                 <div class="form-hint">For gateways that answer HTTP 200 even on failure.</div>
                             </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smsLimitUser">Texts per user per day</label>
+                                <input class="form-input" type="number" id="smsLimitUser" min="1" max="100" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="smsLimitTotal">Texts per day for the whole portal</label>
+                                <input class="form-input" type="number" id="smsLimitTotal" min="10" max="100000" step="1">
+                                <div class="form-hint">Over any 24 hours. Stops a script from sending texts to every user.</div>
+                            </div>
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="smsBodyTemplate">POST body template</label>
@@ -297,8 +397,21 @@
                         </div>
                     </div>
 
+                    <div class="card card-full mb-6">
+                        <div class="form-group">
+                            <label class="form-label" for="factorCurrentPassword">Your Windows password</label>
+                            <div class="password-wrapper">
+                                <input class="form-input" type="password" id="factorCurrentPassword" autocomplete="current-password" maxlength="256">
+                                <button type="button" class="password-toggle" aria-label="Show password">Show</button>
+                            </div>
+                            <div class="form-error"></div>
+                            <div class="form-hint">Needed when you change which methods are offered or the gateway
+                                connection (URL, method, body, headers). Directory admin group only.</div>
+                        </div>
+                    </div>
+
                     <div class="toolbar">
-                        <div class="toolbar-left" style="gap: var(--space-2);">
+                        <div class="toolbar-left gap-2">
                             <button type="submit" class="btn btn-primary" id="factorSaveBtn">Save Settings</button>
                             <button type="button" class="btn btn-secondary" id="factorReloadBtn">Reload</button>
                         </div>
@@ -326,7 +439,7 @@
             </section>
 
             <!-- Mail and reminders -->
-            <section id="tab-mail" class="hidden">
+            <section id="tab-mail" role="tabpanel" aria-labelledby="tabbtn-mail" class="hidden">
                 <p class="text-sm text-muted mb-4">
                     These settings apply immediately, without restarting the portal, and override the server's .env
                     file once saved. An empty SMTP host switches all portal mail off.
@@ -393,6 +506,13 @@
                                 <div class="form-hint">Server local time; the pass runs once a day.</div>
                             </div>
                             <div class="form-group">
+                                <label class="form-label" for="remExpired">After the password expired</label>
+                                <select class="form-select" id="remExpired">
+                                    <option value="false">No mail</option>
+                                    <option value="true">One mail pointing to Forgot password (within 7 days)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
                                 <label class="form-label" for="remSource">Expiry read from</label>
                                 <select class="form-select" id="remSource"></select>
                                 <div class="form-hint">Mails always go to the sign-in domain's address.</div>
@@ -402,7 +522,7 @@
                     </div>
 
                     <div class="toolbar">
-                        <div class="toolbar-left" style="gap: var(--space-2);">
+                        <div class="toolbar-left gap-2">
                             <button type="submit" class="btn btn-primary" id="mailSaveBtn">Save Settings</button>
                             <button type="button" class="btn btn-secondary" id="mailReloadBtn">Reload</button>
                         </div>
@@ -431,7 +551,7 @@
                         never sent twice.
                     </p>
                     <div class="toolbar">
-                        <div class="toolbar-left" style="gap: var(--space-2);">
+                        <div class="toolbar-left gap-2">
                             <button type="button" class="btn btn-secondary" id="remPreviewBtn">Preview Reminders</button>
                             <button type="button" class="btn btn-primary" id="remSendBtn">Send Reminders Now</button>
                         </div>
@@ -442,7 +562,7 @@
         </main>
     </div>
 
-    <script src="/js/app.js"></script>
-    <script src="/js/admin.js?v=20261029c"></script>
+    <script src="/js/app.js?v=20261118"></script>
+    <script src="/js/admin.js?v=20261118"></script>
 </body>
 </html>

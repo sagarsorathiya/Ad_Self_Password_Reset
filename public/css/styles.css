@@ -914,3 +914,28 @@ button.method-card {
 @media (max-width: 640px) {
     .settings-grid { grid-template-columns: 1fr; }
 }
+
+/* --- Utilities (replace inline style attributes, so the CSP needs no 'unsafe-inline' for styles) --- */
+.mx-auto { margin-left: auto; margin-right: auto; }
+.mb-0 { margin-bottom: 0; }
+.w-auto { width: auto; }
+.inline-flex { display: inline-flex; }
+.gap-2 { gap: var(--space-2); }
+.wrap { white-space: normal; }
+.text-left { text-align: left; }
+.list-indent { padding-left: 1.25rem; }
+.row-between { display: flex; justify-content: space-between; align-items: center; }
+.status-item-stack { flex-direction: column; align-items: stretch; gap: 0.75rem; }
+.empty-state-compact { padding-top: 1rem; padding-bottom: 1rem; }
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.method-card-note { margin-top: var(--space-2); font-size: var(--font-size-sm); color: var(--color-text-muted); }

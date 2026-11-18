@@ -1,5 +1,6 @@
 // In-memory stand-in for Active Directory. Mirrors the ldapService interface and error messages.
 const config = require('../config/default');
+const { isLockedOut, isPasswordExpired } = require('./adPassword');
 
 const PASSWORD_HISTORY = 3;
 const UAC_ACCOUNT_DISABLED = 2;
@@ -12,7 +13,11 @@ const SEED_USERS = [
     { username: 'mjones', password: 'Welcome1!', displayName: 'Mary Jones', mail: 'mjones@example.local' },
     { username: 'admin', password: 'Adm1nPass!', displayName: 'Portal Admin', mail: 'admin@example.local', admin: true },
     { username: 'disabled.user', password: 'Passw0rd!', displayName: 'Disabled User', userAccountControl: 514 },
-    { username: 'locked.user', password: 'Passw0rd!', displayName: 'Locked Out User', lockoutTime: '133000000000000000' },
+    { username: 'locked.user', password: 'Passw0rd!', displayName: 'Locked Out User', lockoutTime: '133000000000000000', lockedOut: true },
+    // Lockout duration has passed: lockoutTime is still set (as in AD until the next logon), the computed flag is not
+    { username: 'was.locked', password: 'Passw0rd!', displayName: 'Formerly Locked User', lockoutTime: '133000000000000000' },
+    // "User must change password at next logon"
+    { username: 'expired.user', password: 'Passw0rd!', displayName: 'Expired Password User', mail: 'expired.user@example.local', mustChange: true },
     // Exists only in the first domain (exercises the "not in the second domain" path)
     { username: 'primary.only', password: 'Passw0rd!', displayName: 'Primary Only User', primaryOnly: true },
     // Exists only in the second domain (must never get a reminder: cannot sign in to the portal)
@@ -43,6 +48,8 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
     let directory = new Map();
     // Tests flip this to simulate a domain controller that cannot be reached
     let unavailable = false;
+    // Tests read these to check that bulk operations do not fall back to one lookup per account
+    const calls = { findUser: 0 };
 
     function ensureAvailable() {
         if (unavailable) throw new Error(`Directory server unreachable: connection timed out (mock ${name})`);
@@ -50,6 +57,8 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
 
     function reset() {
         unavailable = false;
+        protectedResetRefused = false;
+        calls.findUser = 0;
         directory = new Map();
         for (const seed of SEED_USERS) {
             if (secondary && seed.primaryOnly) continue;
@@ -67,6 +76,8 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
                     memberOf: seed.admin && !secondary ? [config.ad.adminGroup] : [],
                     userAccountControl: String(seed.userAccountControl || 512),
                     lockoutTime: seed.lockoutTime || '0',
+                    'msDS-User-Account-Control-Computed': seed.lockedOut ? '16' : '0',
+                    pwdLastSet: seed.mustChange ? '0' : '133000000000000000',
                     adminCount: seed.admin ? '1' : undefined,
                     // Stands in for msDS-UserPasswordExpiryTimeComputed (null = no expiry date)
                     passwordExpiresAt: new Date(Date.now() + 60 * DAY_MS),
@@ -86,20 +97,29 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
 
     async function findUser(username) {
         ensureAvailable();
+        calls.findUser++;
         const record = directory.get(String(username || '').toLowerCase());
         return record ? { ...record.entry, memberOf: [...record.entry.memberOf] } : null;
     }
 
-    async function authenticateUser(username, password) {
+    // Same order and messages as ldapService.authenticateUser
+    async function authenticateUser(username, password, { revealState = true } = {}) {
         ensureAvailable();
         const record = directory.get(String(username || '').toLowerCase());
         if (!record) throw new Error('User not found');
 
         const uac = parseInt(record.entry.userAccountControl, 10);
-        if ((uac & UAC_ACCOUNT_DISABLED) !== 0) throw new Error('Account is disabled');
-        if (parseInt(record.entry.lockoutTime, 10) > 0) throw new Error('Account is locked out');
-        if (record.password !== password) throw new Error('Invalid credentials');
+        const disabled = (uac & UAC_ACCOUNT_DISABLED) !== 0;
+        if (revealState && disabled) throw new Error('Account is disabled');
+        if (revealState && isLockedOut(record.entry)) throw new Error('Account is locked out');
+        // AD refuses the bind for disabled, locked-out and expired accounts even with the right password
+        const bindFails = disabled || isLockedOut(record.entry) || isPasswordExpired(record.entry);
+        if (record.password !== password || bindFails) {
+            if (revealState && isPasswordExpired(record.entry)) throw new Error('Password expired');
+            throw new Error('Invalid credentials');
+        }
 
+        record.entry.lockoutTime = '0';
         return findUser(username);
     }
 
@@ -108,17 +128,49 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         const record = findRecordByDn(userDN);
         if (!record) throw new Error('Failed to change password: no such object');
 
+        if (record.entry.adminCount === '1' && protectedResetRefused) {
+            throw new Error('Insufficient access rights to change this password');
+        }
         checkPolicy(record, newPassword);
         record.password = newPassword;
+        record.entry.pwdLastSet = String(Date.now());
         record.history = [newPassword, ...record.history].slice(0, PASSWORD_HISTORY);
         record.entry.passwordExpiresAt = new Date(Date.now() + MAX_PASSWORD_AGE_MS);
     }
 
+    // A user change runs with the user's own rights, so protected accounts may change their own password
     async function changePasswordWithOld(userDN, oldPassword, newPassword) {
         ensureAvailable();
         const record = findRecordByDn(userDN);
         if (!record || record.password !== oldPassword) throw new Error('Invalid credentials');
-        await changePassword(userDN, newPassword);
+        checkPolicy(record, newPassword);
+        record.password = newPassword;
+        record.entry.pwdLastSet = String(Date.now());
+        record.history = [newPassword, ...record.history].slice(0, PASSWORD_HISTORY);
+        record.entry.passwordExpiresAt = new Date(Date.now() + MAX_PASSWORD_AGE_MS);
+    }
+
+    async function unlockAccount(userDN) {
+        ensureAvailable();
+        const record = findRecordByDn(userDN);
+        if (!record) throw new Error('Unlock failed: no such object');
+        record.entry.lockoutTime = '0';
+        record.entry['msDS-User-Account-Control-Computed'] = '0';
+    }
+
+    async function listSignInAccounts() {
+        ensureAvailable();
+        const accounts = new Map();
+        for (const record of directory.values()) {
+            const e = record.entry;
+            accounts.set(e.sAMAccountName.toLowerCase(), {
+                sAMAccountName: e.sAMAccountName,
+                displayName: e.displayName,
+                mail: e.mail,
+                userAccountControl: e.userAccountControl,
+            });
+        }
+        return accounts;
     }
 
     async function listPasswordExpiries() {
@@ -136,15 +188,22 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
             }));
     }
 
+    // Real AD refuses a service-account reset of an adminCount=1 account; tests switch this on to see it
+    let protectedResetRefused = false;
+
     reset();
 
     return {
         name,
+        calls,
         findUser,
         authenticateUser,
         changePassword,
         changePasswordWithOld,
+        unlockAccount,
+        listSignInAccounts,
         listPasswordExpiries,
+        setProtectedResetRefused: (value) => { protectedResetRefused = Boolean(value); },
         isServiceAccountPrivileged: async () => false,
         reset,
         setUnavailable: (value) => { unavailable = Boolean(value); },

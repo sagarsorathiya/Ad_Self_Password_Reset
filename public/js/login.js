@@ -9,6 +9,10 @@
     const params = new URLSearchParams(window.location.search);
     if (params.get('expired')) {
         showAlert('Your session has expired. Please sign in again.');
+    } else if (params.get('revoked')) {
+        showAlert('You were signed out because your password or access changed. Please sign in again.');
+    } else if (params.get('idle')) {
+        showAlert('You were signed out after 30 minutes without activity.');
     } else if (params.get('changed')) {
         showToast('Password changed. Please sign in with your new password.', 'success');
     }
@@ -53,6 +57,13 @@
             goToLanding(data.user);
         } catch (err) {
             showAlert(err.message);
+            if (err.code === 'PASSWORD_EXPIRED') {
+                // Signing in cannot work until the password is reset; go straight there with the name filled in
+                const link = document.createElement('a');
+                link.href = `/reset.html?username=${encodeURIComponent(username)}`;
+                link.textContent = ' Reset it now.';
+                document.getElementById('loginAlertText').appendChild(link);
+            }
             passwordInput.value = '';
             passwordInput.focus();
             setButtonLoading(loginBtn, false);

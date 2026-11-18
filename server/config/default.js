@@ -38,6 +38,10 @@ function buildAdConfig(prefix, defaultName) {
         server: env('SERVER') || '',
         // windows mode: empty = the domain root (defaultNamingContext)
         rawSearchBase: env('USER_SEARCH_BASE') || '',
+        // Authenticated change = bind as the user + delete old/add new, so AD applies history and minimum age
+        userPasswordChange: env('USER_PASSWORD_CHANGE') !== 'false',
+        // Reset (service account) sends LDAP_SERVER_POLICY_HINTS, so AD applies password history to resets too
+        resetPolicyHints: env('RESET_POLICY_HINTS') !== 'false',
     };
 }
 
@@ -105,12 +109,6 @@ const config = {
         generalMax: parseInt(process.env.RATE_LIMIT_GENERAL_MAX, 10) || 100,
     },
 
-    // Account lockout after too many failed verification attempts
-    lockout: {
-        maxAttempts: 5,
-        lockoutDurationMs: 30 * 60 * 1000, // 30 minutes
-    },
-
     // Identity proof required for a password reset:
     //   both      security questions AND authenticator code (default, strongest)
     //   totp_only authenticator code only
@@ -119,9 +117,24 @@ const config = {
         policy: process.env.RESET_POLICY || 'both',
     },
 
-    // How many security questions a user sets and must answer at reset (admin panel overrides this)
+    // Admin panel values override all of these (settingsService)
     security: {
+        // How many security questions a user sets and must answer at reset
         questionCount: Math.min(5, Math.max(2, parseInt(process.env.SECURITY_QUESTION_COUNT, 10) || 3)),
+        // true = sign-in and reset never reveal whether an account exists, is enrolled, disabled, locked or expired
+        hideAccountState: process.env.HIDE_ACCOUNT_STATE === 'true',
+        // Shown to users and checked before AD is asked; set it to the domain's real minimum
+        passwordMinLength: Math.min(128, Math.max(8, parseInt(process.env.PASSWORD_MIN_LENGTH, 10) || 8)),
+        // AD "passwords must meet complexity requirements" (3 of 4 character classes)
+        passwordComplexity: process.env.PASSWORD_COMPLEXITY !== 'false',
+        // Failed reset verifications before the portal blocks self-service reset for a while
+        lockoutAttempts: 5,
+        lockoutMinutes: 30,
+    },
+
+    // Audit log rows older than this are deleted hourly; 0 = keep forever
+    audit: {
+        retentionDays: parseInt(process.env.AUDIT_RETENTION_DAYS, 10) || 0,
     },
 
     // Which second factors users can enrol in (admin panel overrides this). At least one must stay on.
@@ -147,6 +160,9 @@ const config = {
         countryCode: process.env.SMS_COUNTRY_CODE || '',
         // Optional: the gateway answers 200 even on failure, so the body must contain this text to count as sent
         successText: process.env.SMS_SUCCESS_TEXT || '',
+        // Texts per user and for the whole portal in any 24 hours (each one costs money and rings a phone)
+        dailyLimitPerUser: parseInt(process.env.SMS_DAILY_LIMIT_PER_USER, 10) || 10,
+        dailyLimitTotal: parseInt(process.env.SMS_DAILY_LIMIT_TOTAL, 10) || 500,
     },
 
     // Outgoing mail (security alerts and expiry reminders). Empty SMTP_HOST = no mail is sent.
@@ -180,6 +196,8 @@ const config = {
         // Domain whose password expiry is used: 'primary' or 'secondary' (AD2_*, when only that domain expires
         // passwords). Reminders always go to the first-domain mail address of users who can sign in.
         source: process.env.PASSWORD_REMINDER_SOURCE || 'primary',
+        // One "your password has expired" mail per expiry date, within 7 days after it
+        expiredNotice: false,
     },
 };
 

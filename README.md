@@ -100,6 +100,8 @@ All settings live in `.env`, which is git-ignored.
 | `AD_MOCK` | `false` | Use the in-memory directory (development and tests only) |
 | `AD_URL` | – | e.g. `ldaps://dc01.corp.local:636`, or `ldap://dc01.corp.local:389` together with `AD_STARTTLS=true` |
 | `AD_STARTTLS` | `false` | Upgrade `ldap://` connections to TLS before binding (needed for password changes on 389) |
+| `AD_USER_PASSWORD_CHANGE` | `true` | Authenticated changes bind as the user and replace the old password with the new one, so AD applies password history and minimum password age. `false` = verify the old password, then set the new one with the service account (no history check). |
+| `AD_RESET_POLICY_HINTS` | `true` | Resets send the `LDAP_SERVER_POLICY_HINTS` control, so AD applies password history to resets as well. Needs Windows Server 2012 or later DCs; set `false` if a DC refuses it. |
 | `AD_CA_CERT_PATH` | – | PEM of the internal root CA that issued the DC certificate (`node scripts/export-ad-ca.js`) |
 | `AD_TLS_SERVERNAME` | – | DC hostname on its certificate, only when `AD_URL` uses an IP address |
 | `AD_BASE_DN` | – | e.g. `DC=corp,DC=local` |
@@ -111,7 +113,7 @@ All settings live in `.env`, which is git-ignored.
 | `AD2_MODE` | `ldap` | Second domain (see §5.1): `ldap` = LDAPS/StartTLS with certificate checking; `windows` = Windows ADSI with Kerberos/NTLM sign-and-seal on port 389, no certificate (Windows servers only) |
 | `AD2_URL` | – | `ldap` mode: second domain URL. Empty (and no `AD2_SERVER`) = disabled. |
 | `AD2_SERVER` | – | `windows` mode: a **writable** DC of the second domain (hostname preferred, so Kerberos is used) |
-| `AD2_STARTTLS` / `AD2_CA_CERT_PATH` / `AD2_TLS_SERVERNAME` / `AD2_TLS_REJECT_UNAUTHORIZED` | – | Same meaning as the `AD_*` settings, for the second domain |
+| `AD2_STARTTLS` / `AD2_CA_CERT_PATH` / `AD2_TLS_SERVERNAME` / `AD2_TLS_REJECT_UNAUTHORIZED` / `AD2_USER_PASSWORD_CHANGE` / `AD2_RESET_POLICY_HINTS` | – | Same meaning as the `AD_*` settings, for the second domain (`ldap` mode) |
 | `AD2_BIND_DN` / `AD2_BIND_PASSWORD` | – | Service account in the second domain (*Reset password* delegation only). In `windows` mode use `DOMAIN\user` or `user@domain` instead of a DN. |
 | `AD2_USER_SEARCH_BASE` | – | OU searched for the matching user in the second domain (`windows` mode: empty = whole domain) |
 | `AD2_DOMAIN_LABEL` | `Secondary domain` | Name of the second domain in user messages, e.g. `Mail` |
@@ -131,7 +133,11 @@ All settings live in `.env`, which is git-ignored.
 | `SMS_SENDER_ID` / `SMS_COUNTRY_CODE` | – | Sender ID for `{sender}`; dialling code (e.g. `+91`) added to numbers typed without one. |
 | `SMS_SUCCESS_TEXT` | – | For gateways that answer HTTP 200 even on failure: the reply must contain this text. |
 | `SMS_MESSAGE_TEMPLATE` | see `.env.example` | Message text; must contain `{otp}`. |
-| `RESET_POLICY` | `both` | `both`: security questions **and** a one-time code (recommended). `totp_only`: a one-time code only. `either`: one of the two. |
+| `RESET_POLICY` | `both` | `both`: security questions **and** a one-time code (recommended). `totp_only`: a one-time code only. `either`: one of the two. Admin → Verification overrides it (directory admin group + password). |
+| `HIDE_ACCOUNT_STATE` | `false` | `true`: sign-in and reset never reveal whether an account exists, is enrolled, disabled, locked or expired. Users then see every method the policy allows. Editable in Admin → Verification. |
+| `PASSWORD_MIN_LENGTH` / `PASSWORD_COMPLEXITY` | `8` / `true` | Rules shown to users and checked before AD is asked. Match them to the domain policy. Editable in Admin → Verification. |
+| `SMS_DAILY_LIMIT_PER_USER` / `SMS_DAILY_LIMIT_TOTAL` | `10` / `500` | Text messages per user and for the whole portal in any 24 hours. Editable in Admin → Verification. |
+| `AUDIT_RETENTION_DAYS` | `0` | Audit entries older than this are deleted hourly; `0` keeps them forever, otherwise at least 30. Editable in Admin → Audit Log. |
 | `HTTP_REDIRECT_PORT` | – | Optional plain-HTTP port that only redirects to HTTPS (e.g. `80` with `PORT=443`) |
 | `AD_ALLOW_PRIVILEGED_BIND` | `false` | Production refuses to start if `AD_BIND_DN` or `AD2_BIND_DN` is privileged (adminCount=1). Override only; it applies to both accounts unless `AD2_ALLOW_PRIVILEGED_BIND` is set. |
 | `SMTP_HOST` / `SMTP_PORT` | – / `25` | SMTP relay for alerts and reminders. Empty = no mail is sent. |
@@ -165,13 +171,14 @@ Run `.\scripts\protect-secret.ps1` to encrypt every plain-text secret in `.env` 
    ```powershell
    .\scripts\setup-ad-service-account.ps1 -TargetOU "OU=Staff,DC=corp,DC=local" -WriteEnv
    ```
-   This creates `svc-pwreset` (random password, never expires) and the `PasswordResetAdmins` group, delegates **only** *Reset Password*, *Read/Write pwdLastSet* and *Read lockoutTime* on user objects under `-TargetOU`, and with `-WriteEnv` writes `AD_BIND_DN`, a DPAPI-encrypted `AD_BIND_PASSWORD` and `AD_ADMIN_GROUP` into `.env`. Afterwards, deny interactive/RDP logon for `svc-pwreset` by GPO and add help-desk staff to the group. The manual equivalent is in steps 3 and 4.
+   This creates `svc-pwreset` (random password, never expires) and the `PasswordResetAdmins` group, delegates **only** *Reset Password*, *Read/Write pwdLastSet* and *Read/Write lockoutTime* (a reset also clears an AD lockout) on user objects under `-TargetOU`, and with `-WriteEnv` writes `AD_BIND_DN`, a DPAPI-encrypted `AD_BIND_PASSWORD` and `AD_ADMIN_GROUP` into `.env`. Afterwards, deny interactive/RDP logon for `svc-pwreset` by GPO and add help-desk staff to the group. The manual equivalent is in steps 3 and 4.
 
    The portal checks the bind account at startup. If it's privileged (`adminCount=1`, e.g. Domain Admins), it warns in development and **refuses to start in production**.
 3. **Delegate rights (manual alternative)** on the OUs that hold portal users. In *AD Users & Computers*, right-click the OU → *Delegate Control* → the service account → *Create a custom task* → *User objects*:
    - ✅ **Reset password**
    - ✅ Read/Write **pwdLastSet**
-   - ✅ Read **lockoutTime**, **userAccountControl**, **memberOf**
+   - ✅ Read/Write **lockoutTime** (unlock after a reset; without it the reset still works and the unlock is logged as failed)
+   - ✅ Read **userAccountControl**, **memberOf**
    
    Do **not** delegate on privileged OUs such as Domain Admins or service accounts. Protected accounts (adminCount=1) are covered by AdminSDHolder and won't inherit this delegation anyway, which is intended.
 4. **Create the admin group**, e.g. `CN=PasswordResetAdmins,OU=Groups,DC=corp,DC=local`, and add help-desk staff. Membership must be **direct**; nested groups aren't resolved.
@@ -417,7 +424,9 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
    - **Text message (SMS):** shows the number codes go to, and lets you switch to a new one. Codes keep going to the old number until you enter a code sent to the new one.
    - Once you have finished enrollment, **any** change here asks for your current Windows password — including *adding* the second method you didn't set up originally. That is deliberate: it stops someone who gets hold of your signed-in browser from pointing password recovery at their own phone or authenticator.
 6. **Emails** (if your organization turned them on): after every password change or reset you get an email with the time, IP address and browser. If you didn't make the change, contact IT immediately. Before your password expires you get reminders (by default 14, 7, 3 and 1 days before). Change your password in the portal when you get one.
-7. **Password rules:** at least 8 characters, with 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username, and your domain policy may block recently used passwords.
+7. **Password rules:** the page shows the minimum length your administrator set, and (when the domain requires it) 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username or a part of your name. A recently used password is refused, and a password can't be changed again too soon after the last change if the domain sets a minimum password age.
+8. **Expired password or "must change at next logon":** signing in tells you so and links to Forgot password, with your username filled in. A reset also clears an AD lockout.
+9. **Signed out?** The portal signs you out after 30 minutes without activity, and everywhere at once after a password change or reset, so a session someone else may have opened ends too.
 
 ## 9. Admin guide
 
@@ -425,9 +434,11 @@ Members of `AD_ADMIN_GROUP` and portal admins see **Admin** in the navigation ba
 - **Stats:** total, enrolled, pending and locked users (users appear once they've signed in for the first time).
 - **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers, authenticator and mobile number, which you'd use for a lost phone. They must enroll again at their next sign-in.
 - **Portal admins:** **+ Add Admin** grants admin rights by AD username (the account must exist and be enabled; it doesn't need to have signed in yet). **Make Admin** / **Remove Admin** on a user row does the same for existing users, and the *Portal Admins* filter lists them. Changes apply immediately, without signing in again, and are audited (*Admin granted*, *Admin removed*). You can't remove your own rights, and locking a portal admin also blocks their admin access. Members of `AD_ADMIN_GROUP` are always admins and can't be removed here.
-- **Audit Log:** filter by username (partial match), action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), every mail/reminder settings change, test mail and manual reminder run, including failures. **Every one-time code that goes out is logged too** — *Setup code sent by SMS* during enrollment and *Reset code sent by SMS* during a reset — with the masked number it went to and the gateway's own reply, whether or not the send succeeded. That reply carries the provider's message id, which is what lets you trace a message the user says never arrived. Long entries are shortened to one line; click one to see the whole thing.
-- **Security Questions:** set how many questions each user must answer (2 to 5, default 3) and manage the list: add, edit, reorder, deactivate. The count applies to new enrollments at once; a user who already set more keeps them and is still asked all of them when resetting, until they save their questions again - then they move to the new count. Deactivating a question hides it from new enrollments; existing users keep it.
-- **Verification:** which second factor users can set up (authenticator app, SMS, or both; at least one must stay on) and the SMS gateway (URL, method, body template, headers, sender ID, dialling code, message text). Saved values override `.env` immediately, without a restart. The request headers hold the API key: they are stored encrypted and shown only as `********` — leave the field untouched to keep them. **Send Test SMS** sends one message through the saved settings and shows the gateway's reply. Switching a factor off leaves existing users' enrollment in place, but they can no longer use that factor to reset their password. Audited as *Mail/reminder settings changed* and *Test SMS*.
+- **Audit Log:** filter by username (partial match), action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), every mail/reminder settings change, test mail and manual reminder run, including failures. **Every one-time code that goes out is logged too** — *Setup code sent by SMS* during enrollment and *Reset code sent by SMS* during a reset — with the masked number it went to and the gateway's own reply, whether or not the send succeeded. That reply carries the provider's message id, which is what lets you trace a message the user says never arrived. Long entries are shortened to one line; click one to see the whole thing. **Retention** at the top of the tab deletes entries older than the chosen number of days (0 = keep forever).
+- **Security Questions:** set how many questions each user must answer (2 to 5, default 3) and manage the list: add, edit, reorder, deactivate. *In use* shows how many users answered a question; such a question can't be reworded (their answers would change meaning) — deactivate it and add a new one. The count applies to new enrollments at once; a user who already set more keeps them and is still asked all of them when resetting, until they save their questions again - then they move to the new count. Deactivating a question hides it from new enrollments; existing users keep it.
+- **Password reset verification (Verification tab):** what users must prove to reset their password: security questions **and** a one-time code (strongest), questions **or** a code, or a code only. Only members of `AD_ADMIN_GROUP` can change it, and only after typing their Windows password; the change applies to the next request, is audited as *Reset policy changed* (old and new value), and every portal admin with a mail address gets a notice.
+- **Sign-in and reset rules (Verification tab):** whether sign-in and reset explain account problems or hide them (hiding means nobody can tell which accounts exist or are enrolled, but users see every method the policy allows); the minimum password length and whether the 3-of-4 character rule applies (match both to the domain policy); and how many failed reset verifications pause self-service reset, and for how long.
+- **Verification:** which second factor users can set up (authenticator app, SMS, or both; at least one must stay on) and the SMS gateway (URL, method, body template, headers, sender ID, dialling code, message text). Saved values override `.env` immediately, without a restart. The gateway URL and the request headers can hold credentials: both are stored encrypted and shown only as `********` (the panel shows the gateway host) — leave the field untouched to keep them. Changing which methods are offered, or the gateway's URL, method, body or headers, needs a member of `AD_ADMIN_GROUP` and their Windows password, and notifies the other portal admins. *Texts per user per day* and *per day for the whole portal* cap the number of text messages in any 24 hours. **Send Test SMS** sends one message through the saved settings and shows the gateway's reply. Switching a factor off leaves existing users' enrollment in place, but they can no longer use that factor to reset their password. Audited as *Mail/reminder settings changed* and *Test SMS*.
 - **Mail & Reminders:** the SMTP relay (host, port, encryption, optional login, From address) and the expiry reminders (on/off, the day stages, the daily run hour, and which domain's expiry is used). Saved values are stored in the portal database and **override `.env`** from the moment you save them; they take effect immediately, without restarting the portal. An empty SMTP host switches all portal mail off. The SMTP password is stored encrypted and never shown again — leave the field untouched to keep it. **Send Test Mail** sends one message through the current settings. **Preview Reminders** checks the directory and sends nothing: it reports how many accounts were scanned, how many have an expiring password, how many are inside the reminder window, who was already mailed for their current stage (with the time) and who is due now, plus a per-stage table and the reasons any account was skipped. **Send Reminders Now** mails everyone due immediately (a stage already mailed for the same expiry date is never repeated). All three are audited (*Mail/reminder settings changed*, *Test mail*, *Manual reminder run*).
 - **Password Exceptions:** words or phrases that new passwords (change and reset) may not use. *Contains* blocks any password that includes the entry; *Exact* blocks only that exact password. Matching ignores case and common look-alikes (`@`→a, `0`→o, `1`→i/l, `3`→e, `$`/`5`→s, `7`→t, `4`→a), so `company` also blocks `C0mp@ny2026`. Entries can be edited, deactivated or removed and apply immediately, in addition to the domain password policy.
 
@@ -440,23 +451,26 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 | Password theft from the database | Passwords are never stored; all operations go to AD over LDAPS |
 | Database leak | Answers and SMS codes hashed with bcrypt; TOTP secrets and portal-stored mobile numbers encrypted with AES-256-GCM |
 | Brute force | Per IP+username rate limit (5 per 15 min; authenticator QR generation has a separate, looser limit); account lockout after 5 failed verifications (30 min); generic error messages |
-| User enumeration | Unknown and not-enrolled users get the same response; login errors don't reveal whether the user exists |
+| User enumeration | Unknown and not-enrolled users get the same response from the verification steps; login errors don't reveal whether the user exists. With *Hide account state* on, the first reset step and sign-in also answer every username the same way (no enrolled/disabled/locked/expired detail). |
 | Reset token replay | Single-use JWT (10 min) claimed atomically in `used_reset_tokens`; forged or wrong-type tokens rejected |
 | TOTP code replay | Last accepted time step stored per user; a code can't be reused, including the one entered at enrollment |
 | SMS code guessing or replay | 6 random digits, valid 10 minutes, consumed in one statement so it works once, dead after 5 wrong guesses; a new code replaces the old one and can be requested only every 60 seconds |
-| Codes sent to an attacker's phone | Numbers come from AD; a number a user supplies is only stored once a code sent to it is entered, and changing a verified number needs the current Windows password |
+| Codes sent to an attacker's phone | Numbers come from AD; a number a user supplies is only stored once a code sent to it is entered, and changing a verified number needs the current Windows password. A directory number is pinned (keyed hash) when it is verified: if the AD `mobile` attribute changes later, no code is sent until the user confirms the new number. |
+| SMS cost and flooding | Per-user and portal-wide daily caps, a 60-second resend cooldown enforced under a lock, and decoy answers for accounts without SMS (nothing is sent) |
+| Password reuse | Authenticated changes are real user changes and resets use the policy hints control, so AD's password history and minimum age apply to both |
 | Security question bypass | Every stored question must be answered exactly once |
 | Weak security questions | `RESET_POLICY=both` (default) requires questions **and** a one-time code (authenticator or SMS). The questions step only yields a 5-minute step token bound to that user, which is useless as a session or reset token. |
 | Secrets in config files | `.env` secrets DPAPI-encrypted (`protect-secret.ps1`); PFX private key protected by a random DPAPI-encrypted passphrase and git-ignored |
 | Over-privileged service account | Least-privilege account script; startup detects `adminCount=1` accounts (warning in development, refusal in production) |
-| Stolen session | 15-min access tokens; refresh tokens revoked on logout and on admin lock (`token_version`). A session alone cannot change the password (the current one is required) and cannot **add or replace a recovery factor** on an enrolled account: security answers, authenticator and mobile number all require `currentPassword`, checked against AD. Gating on the account's enrollment state rather than on the individual factor is what stops a session being converted into a lasting takeover via a factor the attacker controls. |
-| Stale admin rights | Portal-granted admin rights are re-checked in the database on every admin request, so removing them or locking the user applies immediately; every grant and removal is audited |
+| Stolen session | 15-min access tokens; every session (access and refresh tokens) ends on logout, on admin lock and after a password change or reset (`token_version`, checked on every request); refresh also ends sessions of accounts disabled or deleted in AD; 30-minute idle sign-out in the browser. First-time enrollment needs a sign-in from the last 15 minutes, otherwise the password is asked again. A session alone cannot change the password (the current one is required) and cannot **add or replace a recovery factor** on an enrolled account: security answers, authenticator and mobile number all require `currentPassword`, checked against AD. Gating on the account's enrollment state rather than on the individual factor is what stops a session being converted into a lasting takeover via a factor the attacker controls. |
+| Stale admin rights | Portal-granted admin rights are re-checked in the database on every admin request, so removing them or locking the user applies immediately; every grant and removal is audited and mailed to the user |
+| A rogue portal admin | Changing the reset policy, the offered methods or the SMS gateway connection needs a member of `AD_ADMIN_GROUP` plus their Windows password, and notifies the other admins; the gateway cannot point at the portal server itself |
 | Token misuse | Access, refresh and reset tokens are typed; only `access` tokens open a session; algorithm pinned to HS256 |
 | Factor takeover via a stolen session | Changing existing security answers or replacing the authenticator requires the current AD password (rate-limited) |
 | Clear-text passwords on the network | The AD connection must be encrypted (startup refuses plain `ldap://`); production refuses to start without HTTPS or `TRUST_PROXY`; optional `PG_SSL` |
 | Passwords in logs | Unknown "usernames" (often mistyped passwords) are logged as `(unknown user)`; malformed request bodies are never logged or echoed; `Cache-Control: no-store` on all API responses |
 | Security question visibility | Answers exist only as bcrypt hashes and are never returned by any endpoint (covered by a test); unknown or unenrolled accounts get stable decoy questions and the same errors and timing as wrong answers |
-| XSS | Strict CSP (`script-src 'self'`, no inline scripts); all dynamic content escaped or set with `textContent` |
+| XSS | Strict CSP (`script-src 'self'`, `style-src 'self'`, no inline scripts or style attributes); all dynamic content escaped or set with `textContent` |
 | SQL injection | Parameterized queries only (covered by a test) |
 | Second-domain account takeover by name | Sync never writes a second-domain account that is disabled, protected (`adminCount=1`) or the `AD2_BIND_DN` account; the second domain is looked up before anything is written, and every outcome is audited (`password_sync`) |
 | Secrets passed to the Windows helper | `AD2_MODE=windows` sends credentials and passwords to PowerShell over stdin only (never the command line), and the connection is sealed (sign-and-seal); keep PowerShell *Module Logging* (event 4103) disabled on the portal server, because it would record command arguments |
@@ -472,7 +486,8 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | POST | `/api/auth/login` | – | `{ username, password }` |
 | POST | `/api/auth/refresh` | – | `{ refreshToken }` |
 | GET | `/api/auth/me` | user | – |
-| POST | `/api/auth/logout` | user | – |
+| POST | `/api/auth/reauth` | user | `{ password }` → a new access token with a fresh sign-in time (first enrollment needs one from the last 15 minutes: 401 `RECENT_AUTH_REQUIRED`) |
+| POST | `/api/auth/logout` | user | – (ends the user's sessions on every device) |
 | GET | `/api/enrollment/questions` | user | – |
 | GET | `/api/enrollment/security-questions` | user | – → current `[{ questionId, questionText }]` (no answers) |
 | POST | `/api/enrollment/security-questions` | user | `{ answers: [{ questionId, answer }] ×3, currentPassword? }`. An empty `answer` keeps the saved one; `currentPassword` is required once questions exist. |
@@ -481,15 +496,16 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | POST | `/api/enrollment/sms/setup` | user | `{ mobile?, currentPassword? }` → `{ mobileMasked, source, resendAfter }`. `mobile` only when AD has no number (400 `MOBILE_REQUIRED`); `currentPassword` once the user is enrolled, or SMS is already active (401 `REAUTH_REQUIRED`). |
 | POST | `/api/enrollment/sms/verify` | user | `{ code }` from the text message; stores the number and enables SMS |
 | GET | `/api/enrollment/status` | user | – |
-| POST | `/api/password/change` | user | `{ currentPassword, newPassword, confirmPassword }`. Enrolled users only; otherwise 403 with `code: 'ENROLLMENT_REQUIRED'`. |
-| POST | `/api/password/reset/verify-user` | – | `{ username }` → `availableMethods` |
+| POST | `/api/password/change` | user | `{ currentPassword, newPassword, confirmPassword }`. Enrolled users only; otherwise 403 with `code: 'ENROLLMENT_REQUIRED'`. Ends all sessions on success. |
+| GET | `/api/password/rules` | – | → `{ minLength, complexity }` |
+| POST | `/api/password/reset/verify-user` | – | `{ username }` → `username` (directory spelling), `availableMethods`, `mobileMasked`; 400 `PROTECTED_ACCOUNT` for administrator accounts. With *Hide account state*: the same answer for every username, `generic: true`. |
 | POST | `/api/password/reset/get-questions` | – | `{ username }` |
 | POST | `/api/password/reset/verify-questions` | – | `{ username, answers }` → `resetToken` (`either`) or `stepToken` + `nextSteps` (`both`) |
 | POST | `/api/password/reset/verify-totp` | – | `{ username, code, stepToken? }` → `resetToken` (`stepToken` required under `both`) |
-| POST | `/api/password/reset/send-sms` | – | `{ username, stepToken? }` → `{ mobileMasked, resendAfter }`. Answers the same for unknown accounts and sends nothing. |
+| POST | `/api/password/reset/send-sms` | – | `{ username, stepToken? }` → `{ mobileMasked, resendAfter }`. Answers the same for unknown accounts and sends nothing. 429 `SMS_LIMIT` at a daily cap, 409 `MOBILE_CHANGED` when the directory number changed since it was verified. |
 | POST | `/api/password/reset/verify-sms` | – | `{ username, code, stepToken? }` → `resetToken` |
-| POST | `/api/password/reset/set-password` | – | `{ resetToken, newPassword, confirmPassword }` |
-| GET | `/api/admin/users` | admin | `?page&limit&search&filter=all\|enrolled\|pending\|locked\|admins` |
+| POST | `/api/password/reset/set-password` | – | `{ resetToken, newPassword, confirmPassword }` → `{ sync, unlocked }` |
+| GET | `/api/admin/users` | admin | `?page&limit&search&filter=all\|enrolled\|pending\|locked\|admins&sort=created\|activity` |
 | PUT | `/api/admin/users/:id/lock` | admin | `{ locked: boolean }` |
 | PUT | `/api/admin/users/:id/reset-enrollment` | admin | – |
 | PUT | `/api/admin/users/:id/admin` | admin | `{ isAdmin: boolean }` (your own rights can't be removed) |
@@ -500,7 +516,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | PUT | `/api/admin/questions/:id` | admin | `{ questionText?, isActive?, sortOrder? }` |
 | GET/POST | `/api/admin/password-exceptions` | admin | POST `{ term, matchType?: 'contains'\|'exact' }` |
 | PUT/DELETE | `/api/admin/password-exceptions/:id` | admin | PUT `{ term?, matchType?, isActive? }` |
-| GET/PUT | `/api/admin/settings` | admin | PUT `{ settings: { 'mail.host', 'mail.port', 'mail.secure', 'mail.user', 'mail.password', 'mail.from', 'reminders.enabled', 'reminders.days', 'reminders.hour', 'reminders.source', 'security.questionCount', 'factors.totp', 'factors.sms', 'sms.url', 'sms.method', 'sms.bodyType', 'sms.bodyTemplate', 'sms.headers', 'sms.senderId', 'sms.countryCode', 'sms.successText', 'sms.messageTemplate' } }` (only the keys sent are changed) |
+| GET/PUT | `/api/admin/settings` | admin | PUT `{ settings: { 'mail.host', 'mail.port', 'mail.secure', 'mail.user', 'mail.password', 'mail.from', 'reminders.enabled', 'reminders.days', 'reminders.hour', 'reminders.source', 'security.questionCount', 'factors.totp', 'factors.sms', 'sms.url', 'sms.method', 'sms.bodyType', 'sms.bodyTemplate', 'sms.headers', 'sms.senderId', 'sms.countryCode', 'sms.successText', 'sms.messageTemplate', 'sms.dailyLimitPerUser', 'sms.dailyLimitTotal', 'reset.policy', 'security.hideAccountState', 'security.passwordMinLength', 'security.passwordComplexity', 'security.lockoutAttempts', 'security.lockoutMinutes', 'reminders.expiredNotice', 'audit.retentionDays' }, currentPassword? }` (only the keys sent are changed). Changing `reset.policy`, `factors.*`, `sms.url`, `sms.method`, `sms.bodyTemplate` or `sms.headers` needs an `AD_ADMIN_GROUP` member (403 `AD_ADMIN_REQUIRED`) and `currentPassword` (401 `REAUTH_REQUIRED` / `REAUTH_FAILED`). |
 | POST | `/api/admin/settings/test-mail` | admin | `{ to }` |
 | POST | `/api/admin/settings/test-sms` | admin | `{ to }` (mobile number) |
 | POST | `/api/admin/reminders/run` | admin | `{ send?: boolean }` (default: preview only) → counts (`checked`, `withExpiry`, `expired`, `inWindow`, `dueTotal`, `remindedTotal`, `sent`, `failed`), `due`, `reminded`, `skipped` |
@@ -510,14 +526,14 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 ```powershell
 npm run test:unit          # no database needed
 npm run test:integration   # uses <PG_DATABASE>_test, created automatically
-npm test                   # everything (136 tests)
+npm test                   # everything
 ```
 The integration tests start the app on a random port with the mock AD and reset the test database before each test. They refuse to run against a database whose name doesn't end in `_test`.
 
 ## 13. Maintenance & operations
 
 - **Expired reset tokens** are removed automatically every hour, and used SMS codes a day after they expire; reminder records 30 days after the expiry date they belong to.
-- **Audit log retention:** decide on a retention period and schedule e.g. `DELETE FROM audit_log WHERE created_at < NOW() - INTERVAL '1 year';`
+- **Audit log retention:** set it in Admin → Audit Log → Retention (or `AUDIT_RETENTION_DAYS`); older entries are deleted every hour in batches. Take a backup before setting it the first time.
 - **Backups:** daily `pg_dump -h localhost -U postgres -Fc <database> > portal.dump`. Keep the `TOTP_ENCRYPTION_KEY` in your vault: a machine-encrypted `.env` can't be restored on another server.
 - **Upgrades:** copy the new files to the install folder (never overwrite `.env`), run `npm ci --omit=dev` and `npm run db:init` (applies schema changes), then restart the portal.
 - **Logs:** security events are in the `audit_log` table and the admin page.
@@ -561,11 +577,11 @@ The integration tests start the app on a random port with the mock AD and reset 
 ## 15. Known limitations
 
 - **DPAPI scope:** CurrentUser-encrypted secrets can only be decrypted by that Windows account, and machine scope only on that server. Anyone who can run code as that account on that server can still read them. Protect the server itself.
-- **Knowing whether an account is enrolled:** `verify-user` has to tell an enrolled user which methods are available, so it reveals whether an account is enrolled. This is limited by rate limiting.
-- **Password history on reset:** the service account sets the password with an admin reset (`replace unicodePwd`). AD **doesn't enforce password history** for admin resets; length and complexity are still enforced. The same applies to *Change Password*, where the current password is checked with an extra bind first.
+- **Knowing whether an account is enrolled:** by default `verify-user` tells an enrolled user which methods are available, so it reveals whether an account is enrolled (limited by rate limiting). Turn on *Hide account state* (Admin → Verification) to answer every username the same way, at the cost of showing every method to everyone.
+- **Password history:** enforced for portal changes and resets in the first domain (and in an `ldap`-mode second domain). An `AD2_MODE=windows` second domain is written with ADSI `SetPassword`, which applies length and complexity but **not** history.
 - **Nested groups** aren't resolved for admin membership.
-- **Access tokens** stay valid for up to 15 minutes after logout or lock; refresh tokens are revoked immediately.
-- **Password changes outside the portal** (AD Users & Computers, Ctrl+Alt+Del) don't end existing portal sessions. After *Change Password* in the portal, the browser signs the user out.
+- **Sessions are per user, not per device:** signing out, a lock or a password change in the portal ends the user's sessions on every device.
+- **Password changes outside the portal** (AD Users & Computers, Ctrl+Alt+Del) don't end existing portal sessions; disabling or deleting the account in AD ends them at the next refresh (within 15 minutes).
 - **Users appear in the admin list** only after their first sign-in to the portal.
 - **Second domain:** the two domains can't be updated atomically. If the second domain rejects a password the first already accepted, the domains differ until the user resets again (see §5.1). Passwords changed outside the portal aren't synced.
 

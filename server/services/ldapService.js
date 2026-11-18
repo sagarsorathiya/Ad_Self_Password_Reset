@@ -1,6 +1,9 @@
 const ldap = require('ldapjs');
 const config = require('../config/default');
 const { fileTimeToDate } = require('./adTime');
+const {
+    PolicyHintsControl, encodePassword, mapPasswordError, isLockedOut, isPasswordExpired,
+} = require('./adPassword');
 
 // RFC 4515 escaping for values inside LDAP search filters (prevents LDAP injection)
 function escapeFilterValue(value) {
@@ -139,7 +142,7 @@ function createDirectory(ad) {
                     attributes: [
                         'dn', 'sAMAccountName', 'displayName', 'mail', 'mobile',
                         'userPrincipalName', 'memberOf', 'userAccountControl',
-                        'pwdLastSet', 'lockoutTime', 'adminCount',
+                        'pwdLastSet', 'lockoutTime', 'adminCount', 'msDS-User-Account-Control-Computed',
                     ],
                 };
 
@@ -221,36 +224,47 @@ function createDirectory(ad) {
      * Authenticate a user by attempting an LDAP bind with their credentials.
      * @param {string} username - sAMAccountName
      * @param {string} password - User's password
+     * @param {object} [options] - { revealState } false = no disabled/locked/expired detail before or after the
+     *   bind: every failure is 'Invalid credentials' (security.hideAccountState)
      * @returns {Promise<object>} - User object from AD
      */
-    async function authenticateUser(username, password) {
+    async function authenticateUser(username, password, { revealState = true } = {}) {
         // First, find the user to get their DN
         const user = await findUser(username);
         if (!user) {
             throw new Error('User not found');
         }
 
-        // Check if account is disabled (bit 2 of userAccountControl)
-        const uac = parseInt(user.userAccountControl, 10);
-        if (uac && (uac & 2) !== 0) {
-            throw new Error('Account is disabled');
-        }
-
-        // Check if account is locked out
-        if (user.lockoutTime && parseInt(user.lockoutTime, 10) > 0) {
-            throw new Error('Account is locked out');
+        if (revealState) {
+            // Check if account is disabled (bit 2 of userAccountControl)
+            const uac = parseInt(user.userAccountControl, 10);
+            if (uac && (uac & 2) !== 0) {
+                throw new Error('Account is disabled');
+            }
+            if (isLockedOut(user)) {
+                throw new Error('Account is locked out');
+            }
         }
 
         // Attempt bind with user's credentials
-        const userClient = await bindClient(user.dn, password);
+        let userClient;
+        try {
+            userClient = await bindClient(user.dn, password);
+        } catch (err) {
+            // AD refuses the bind for an expired or "must change" password even when it is correct
+            if (revealState && err.message === 'Invalid credentials' && isPasswordExpired(user)) {
+                throw new Error('Password expired');
+            }
+            throw err;
+        }
         userClient.unbind(() => {});
 
         return user;
     }
 
     /**
-     * Change a user's password in AD.
-     * Requires the service account to have "Reset Password" permission.
+     * Set a user's password with the service account ("Reset Password" right), e.g. after a verified reset.
+     * With resetPolicyHints (default) the LDAP_SERVER_POLICY_HINTS control makes AD apply password history too.
      * @param {string} userDN - The user's distinguished name
      * @param {string} newPassword - The new password
      * @returns {Promise<void>}
@@ -263,35 +277,15 @@ function createDirectory(ad) {
         const client = await bindServiceAccount();
 
         try {
-            // AD requires the password to be enclosed in quotes and UTF-16LE encoded
-            const encodedPassword = Buffer.from(`"${newPassword}"`, 'utf16le');
-
             const change = new ldap.Change({
                 operation: 'replace',
-                modification: new ldap.Attribute({
-                    type: 'unicodePwd',
-                    values: [encodedPassword],
-                }),
+                modification: new ldap.Attribute({ type: 'unicodePwd', values: [encodePassword(newPassword)] }),
             });
+            const controls = ad.resetPolicyHints ? [new PolicyHintsControl()] : [];
 
             // Must await: the finally block would otherwise close the connection before AD replies
             return await new Promise((resolve, reject) => {
-                client.modify(userDN, change, (err) => {
-                    if (err) {
-                        // ldapjs 3 drops AD's diagnostic text (it reads res.errorMessage, renamed diagnosticMessage),
-                        // so a policy rejection arrives as a bare "Unwilling To Perform" (code 53). On an encrypted
-                        // unicodePwd replace with Reset Password rights, 53 means the password policy (0000052D).
-                        if (err.code === 53 || (err.message && err.message.includes('0000052D'))) {
-                            reject(new Error('Password does not meet the domain password policy requirements'));
-                        } else if (err.message && err.message.includes('00000056')) {
-                            reject(new Error('Current password is incorrect'));
-                        } else {
-                            reject(new Error(`Failed to change password: ${err.message}`));
-                        }
-                    } else {
-                        resolve();
-                    }
-                });
+                client.modify(userDN, change, controls, (err) => (err ? reject(mapPasswordError(err)) : resolve()));
             });
         } finally {
             client.unbind(() => {});
@@ -299,20 +293,101 @@ function createDirectory(ad) {
     }
 
     /**
-     * Change password with old password verification (for authenticated change).
-     * User must provide current password.
+     * Authenticated change. By default a real user change: bound as the user, one modify that deletes the old
+     * unicodePwd value and adds the new one, so AD enforces history and minimum password age.
+     * AD_USER_PASSWORD_CHANGE=false restores the old path (verify by bind, then a service-account reset).
      * @param {string} userDN - User's DN
      * @param {string} oldPassword - Current password
      * @param {string} newPassword - New password
      * @returns {Promise<void>}
      */
     async function changePasswordWithOld(userDN, oldPassword, newPassword) {
-        // First verify the old password by binding as the user
-        const userClient = await bindClient(userDN, oldPassword);
-        userClient.unbind(() => {});
+        if (!ad.userPasswordChange) {
+            const check = await bindClient(userDN, oldPassword); // throws 'Invalid credentials'
+            check.unbind(() => {});
+            return changePassword(userDN, newPassword);
+        }
+        if (!isEncrypted()) {
+            throw new Error('LDAP connection error: password changes require LDAPS or AD_STARTTLS=true');
+        }
 
-        // Then change the password using service account
-        await changePassword(userDN, newPassword);
+        // StartTLS (when configured) completes inside bindClient before the password is sent
+        const client = await bindClient(userDN, oldPassword); // throws 'Invalid credentials'
+        try {
+            const changes = [
+                new ldap.Change({
+                    operation: 'delete',
+                    modification: new ldap.Attribute({ type: 'unicodePwd', values: [encodePassword(oldPassword)] }),
+                }),
+                new ldap.Change({
+                    operation: 'add',
+                    modification: new ldap.Attribute({ type: 'unicodePwd', values: [encodePassword(newPassword)] }),
+                }),
+            ];
+            return await new Promise((resolve, reject) => {
+                client.modify(userDN, changes, (err) => (err ? reject(mapPasswordError(err)) : resolve()));
+            });
+        } finally {
+            client.unbind(() => {});
+        }
+    }
+
+    /**
+     * Clear an AD lockout (lockoutTime = 0). Needs "Write lockoutTime" on user objects for the service account.
+     * @param {string} userDN
+     */
+    async function unlockAccount(userDN) {
+        const client = await bindServiceAccount();
+        try {
+            const change = new ldap.Change({
+                operation: 'replace',
+                modification: new ldap.Attribute({ type: 'lockoutTime', values: ['0'] }),
+            });
+            return await new Promise((resolve, reject) => {
+                client.modify(userDN, change, (err) => (err ? reject(new Error(`Unlock failed: ${err.message}`)) : resolve()));
+            });
+        } finally {
+            client.unbind(() => {});
+        }
+    }
+
+    /**
+     * Every user account in one paged search, for the reminder run (instead of one bind per account).
+     * @returns {Promise<Map<string, {sAMAccountName, displayName, mail, userAccountControl}>>} keyed by lower-case name
+     */
+    async function listSignInAccounts() {
+        const client = await bindServiceAccount();
+        try {
+            return await new Promise((resolve, reject) => {
+                const searchOptions = {
+                    scope: 'sub',
+                    filter: '(&(objectCategory=person)(objectClass=user))',
+                    attributes: ['sAMAccountName', 'displayName', 'mail', 'userAccountControl'],
+                    paged: { pageSize: 500 },
+                };
+                client.search(ad.userSearchBase, searchOptions, (err, res) => {
+                    if (err) {
+                        reject(new Error(`LDAP search failed: ${err.message}`));
+                        return;
+                    }
+                    const accounts = new Map();
+                    res.on('searchEntry', (entry) => {
+                        const attrs = entryAttributes(entry);
+                        if (!attrs.sAMAccountName) return;
+                        accounts.set(String(attrs.sAMAccountName).toLowerCase(), {
+                            sAMAccountName: attrs.sAMAccountName,
+                            displayName: attrs.displayName || '',
+                            mail: attrs.mail || '',
+                            userAccountControl: attrs.userAccountControl,
+                        });
+                    });
+                    res.on('error', (e) => reject(new Error(`LDAP search error: ${e.message}`)));
+                    res.on('end', () => resolve(accounts));
+                });
+            });
+        } finally {
+            client.unbind(() => {});
+        }
     }
 
     return {
@@ -321,7 +396,9 @@ function createDirectory(ad) {
         authenticateUser,
         changePassword,
         changePasswordWithOld,
+        unlockAccount,
         listPasswordExpiries,
+        listSignInAccounts,
         isServiceAccountPrivileged,
     };
 }

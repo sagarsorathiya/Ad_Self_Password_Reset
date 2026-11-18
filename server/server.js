@@ -61,17 +61,45 @@ async function cleanupExpiredTokens() {
         // Kept for a day after expiry so an admin can still see the attempt in context, then dropped
         const codes = await smsOtpService.purgeExpired();
         if (codes > 0) console.log(`[Cleanup] Removed ${codes} expired SMS code(s)`);
+        await purgeAuditLog();
     } catch (err) {
         console.error('[Cleanup] Failed to purge expired tokens:', err.message);
     }
 }
+
+// Audit retention (audit.retentionDays, 0 = keep forever). Batched, so a first purge never holds a long lock.
+async function purgeAuditLog() {
+    const days = settingsService.current().audit.retentionDays;
+    if (!(days > 0)) return;
+    let removed = 0;
+    for (;;) {
+        const result = await db.query(
+            `DELETE FROM audit_log WHERE id IN (
+                 SELECT id FROM audit_log WHERE created_at < NOW() - make_interval(days => $1) LIMIT 5000)`,
+            [days]
+        );
+        removed += result.rowCount;
+        if (result.rowCount < 5000) break;
+    }
+    if (removed > 0) console.log(`[Cleanup] Removed ${removed} audit row(s) older than ${days} days`);
+}
+
+// Logged instead of dying silently; run-portal.ps1 restarts Node after an uncaught exception
+process.on('unhandledRejection', (reason) => console.error('[Server] Unhandled rejection:', reason?.message || reason));
+process.on('uncaughtException', (err) => {
+    console.error('[Server] Uncaught exception:', err.message);
+    process.exit(1);
+});
 
 const server = createServer();
 const scheme = config.server.https ? 'https' : 'http';
 
 // Stored admin settings (mail, reminders) before anything reads them; .env stays the fallback
 settingsService.refresh().catch((err) => console.error(`[Settings] Initial load failed: ${err.message}`))
-    .finally(() => startListening());
+    .finally(() => {
+        startListening();
+        startCleanup();
+    });
 
 function startListening() {
 server.listen(PORT, config.server.host, () => {
@@ -92,6 +120,7 @@ server.listen(PORT, config.server.host, () => {
     console.log(`  Mail:        ${mail.host ? `${mail.host}:${mail.port}` : 'off (no SMTP host configured)'}`);
     const enabledFactors = [factors.totp ? 'authenticator app' : null, factors.sms ? 'SMS code' : null].filter(Boolean);
     console.log(`  2nd factor:  ${enabledFactors.join(', ')}`);
+    console.log(`  Reset policy: ${settingsService.resetPolicy()}`);
     if (factors.sms) {
         console.log(`  SMS gateway: ${sms.url ? `${sms.method} ${smsService.describeGateway().host}` : 'NOT CONFIGURED'}`);
     }
@@ -127,9 +156,13 @@ if (config.server.https && redirectPort) {
     }).listen(redirectPort, () => console.log(`  HTTP ${redirectPort} redirects to HTTPS ${PORT}`));
 }
 
-cleanupExpiredTokens();
-const cleanupTimer = setInterval(cleanupExpiredTokens, CLEANUP_INTERVAL_MS);
-cleanupTimer.unref();
+// After the stored settings are loaded, so the retention value from the admin panel applies to the first run
+let cleanupTimer = null;
+function startCleanup() {
+    cleanupExpiredTokens();
+    cleanupTimer = setInterval(cleanupExpiredTokens, CLEANUP_INTERVAL_MS);
+    cleanupTimer.unref();
+}
 const reminderTimer = passwordReminderService.start();
 
 function shutdown(signal) {

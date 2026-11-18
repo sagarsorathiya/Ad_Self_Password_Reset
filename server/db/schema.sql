@@ -131,6 +131,12 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Keyed hash of the mobile number the user proved they hold (cryptoService.hmac): a directory number that no
+-- longer matches it is not used for codes until the user confirms it again
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile_verified_hash TEXT;
+-- Same hash for the number each code was sent to (fills mobile_verified_hash on first use for older enrolments)
+ALTER TABLE sms_codes ADD COLUMN IF NOT EXISTS number_hash TEXT;
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_audit_log_username ON audit_log(username);
@@ -140,6 +146,12 @@ CREATE INDEX IF NOT EXISTS idx_used_reset_tokens_jti ON used_reset_tokens(token_
 CREATE INDEX IF NOT EXISTS idx_used_reset_tokens_expires ON used_reset_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_sms_codes_user ON sms_codes(user_id, purpose, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sms_codes_expires ON sms_codes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_time ON audit_log (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action_time ON audit_log (action, created_at);
+-- AD names are case-insensitive: one portal row per account whatever the spelling.
+-- Fails on existing case-duplicates; check first:
+--   SELECT LOWER(username), COUNT(*) FROM users GROUP BY 1 HAVING COUNT(*) > 1;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username));
 
 -- Seed default security questions (only into an empty table, so re-running is safe)
 INSERT INTO security_questions (question_text, sort_order)

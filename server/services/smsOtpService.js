@@ -10,6 +10,11 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const db = require('../config/db');
 const smsService = require('./smsService');
+const settingsService = require('./settingsService');
+const cryptoService = require('./cryptoService');
+
+// Audit actions that mean "a real code went out" (decoys and the admin Test SMS write none of these)
+const SENT_ACTIONS = ['enrollment_sms', 'password_reset_sms'];
 
 const CODE_LENGTH = 6;
 const CODE_TTL_MINUTES = 10;
@@ -27,6 +32,15 @@ class CooldownError extends Error {
     }
 }
 
+class SmsLimitError extends Error {
+    /** @param {'user'|'total'} scope - which daily limit was reached */
+    constructor(scope) {
+        super(scope === 'total' ? 'Portal-wide daily SMS limit reached' : 'Daily SMS limit for this user reached');
+        this.name = 'SmsLimitError';
+        this.scope = scope;
+    }
+}
+
 function generateCode() {
     return String(crypto.randomInt(0, 10 ** CODE_LENGTH)).padStart(CODE_LENGTH, '0');
 }
@@ -34,8 +48,8 @@ function generateCode() {
 /**
  * Seconds left before another code may be sent, 0 when one may be sent now.
  */
-async function cooldownRemaining(userId, purpose) {
-    const result = await db.query(
+async function cooldownRemaining(userId, purpose, client = db) {
+    const result = await client.query(
         `SELECT EXTRACT(EPOCH FROM (NOW() - created_at)) AS age FROM sms_codes
          WHERE user_id = $1 AND purpose = $2 ORDER BY created_at DESC LIMIT 1`,
         [userId, purpose]
@@ -50,20 +64,53 @@ async function cooldownRemaining(userId, purpose) {
  * @returns {Promise<{expiresAt: Date, resendAfter: number}>}
  * @throws {CooldownError} when the previous code is too recent
  */
+/**
+ * Daily caps from the admin settings, counted from the audit log over the last 24 hours.
+ * @throws {SmsLimitError}
+ */
+async function assertWithinLimits(userId) {
+    const { dailyLimitPerUser, dailyLimitTotal } = settingsService.current().sms;
+    const { rows } = await db.query(
+        `SELECT COUNT(*) FILTER (WHERE user_id = $1) AS mine, COUNT(*) AS total
+         FROM audit_log WHERE action = ANY($2) AND success = TRUE AND created_at > NOW() - INTERVAL '24 hours'`,
+        [userId, SENT_ACTIONS]
+    );
+    if (Number(rows[0].total) >= dailyLimitTotal) throw new SmsLimitError('total');
+    if (Number(rows[0].mine) >= dailyLimitPerUser) throw new SmsLimitError('user');
+}
+
 async function issue({ userId, purpose, number, maskedNumber }) {
-    const wait = await cooldownRemaining(userId, purpose);
-    if (wait > 0) throw new CooldownError(wait);
+    await assertWithinLimits(userId);
 
     const code = generateCode();
+    const codeHash = await bcrypt.hash(code, BCRYPT_ROUNDS);
     const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60 * 1000);
 
-    // Earlier codes stop working the moment a new one is issued
-    await db.query('DELETE FROM sms_codes WHERE user_id = $1 AND purpose = $2', [userId, purpose]);
-    const inserted = await db.query(
-        `INSERT INTO sms_codes (user_id, purpose, code_hash, mobile_hint, expires_at)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [userId, purpose, await bcrypt.hash(code, BCRYPT_ROUNDS), maskedNumber || null, expiresAt]
-    );
+    // Cooldown check, delete and insert under one per-(user, purpose) lock: two parallel requests can no
+    // longer both pass the cooldown and send two messages
+    const client = await db.getClient();
+    let insertedId;
+    try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`sms:${userId}:${purpose}`]);
+        const wait = await cooldownRemaining(userId, purpose, client);
+        if (wait > 0) throw new CooldownError(wait);
+
+        // Earlier codes stop working the moment a new one is issued
+        await client.query('DELETE FROM sms_codes WHERE user_id = $1 AND purpose = $2', [userId, purpose]);
+        const inserted = await client.query(
+            `INSERT INTO sms_codes (user_id, purpose, code_hash, mobile_hint, expires_at, number_hash)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            [userId, purpose, codeHash, maskedNumber || null, expiresAt, cryptoService.hmac(number)]
+        );
+        await client.query('COMMIT');
+        insertedId = inserted.rows[0].id;
+    } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+    } finally {
+        client.release();
+    }
 
     let gateway;
     try {
@@ -71,7 +118,7 @@ async function issue({ userId, purpose, number, maskedNumber }) {
     } catch (err) {
         // Released like a reminder that failed to send: a code the user never received must not sit in the
         // way of the next attempt, neither as the "newest code" nor as a cooldown
-        await db.query('DELETE FROM sms_codes WHERE id = $1', [inserted.rows[0].id]);
+        await db.query('DELETE FROM sms_codes WHERE id = $1', [insertedId]);
         throw err;
     }
 
@@ -82,13 +129,14 @@ async function issue({ userId, purpose, number, maskedNumber }) {
 
 /**
  * Check a code the user typed and consume it on success.
- * @returns {Promise<{ok: true}|{ok: false, reason: 'none'|'expired'|'attempts'|'mismatch'}>}
+ * @returns {Promise<{ok: true, numberHash: string|null}|{ok: false, reason: 'none'|'expired'|'attempts'|'mismatch'}>}
+ *   numberHash: cryptoService.hmac() of the number the code was sent to
  */
 async function verify({ userId, purpose, code }) {
     if (!/^\d{6}$/.test(String(code || ''))) return { ok: false, reason: 'mismatch' };
 
     const result = await db.query(
-        `SELECT id, code_hash, attempts, expires_at FROM sms_codes
+        `SELECT id, code_hash, attempts, expires_at, number_hash FROM sms_codes
          WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL
          ORDER BY created_at DESC LIMIT 1`,
         [userId, purpose]
@@ -110,7 +158,7 @@ async function verify({ userId, purpose, code }) {
         'UPDATE sms_codes SET consumed_at = NOW() WHERE id = $1 AND consumed_at IS NULL RETURNING id',
         [row.id]
     );
-    return consumed.rows.length === 1 ? { ok: true } : { ok: false, reason: 'none' };
+    return consumed.rows.length === 1 ? { ok: true, numberHash: row.number_hash || null } : { ok: false, reason: 'none' };
 }
 
 /**
@@ -153,7 +201,9 @@ module.exports = {
     clear,
     purgeExpired,
     cooldownRemaining,
+    assertWithinLimits,
     CooldownError,
+    SmsLimitError,
     CODE_TTL_MINUTES,
     MAX_ATTEMPTS,
     RESEND_COOLDOWN_SECONDS,

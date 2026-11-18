@@ -54,8 +54,23 @@ async function waitForNotification(username) {
     throw new Error(`No notification audit row for ${username}`);
 }
 
+// Enrolling sends its own security alert after the response: let it land, then count from zero
+async function afterEnrolment(username) {
+    for (let i = 0; i < 50; i++) {
+        const rows = (await db.query(
+            "SELECT 1 FROM audit_log WHERE action = 'notification' AND username = $1 AND details LIKE 'Security alert%'",
+            [username]
+        )).rows;
+        if (rows.length) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await db.query("DELETE FROM audit_log WHERE action = 'notification'");
+    sent.length = 0;
+}
+
 async function changePassword(username, password) {
     const { token } = await enrollUser(api, username, password);
+    await afterEnrolment(username);
     const res = await api('POST', '/api/password/change', {
         currentPassword: password, newPassword: NEW_PASSWORD, confirmPassword: NEW_PASSWORD,
     }, token);
@@ -82,6 +97,7 @@ describe('password-changed alert', () => {
 
     test('is mailed after a reset and names the verification method', async () => {
         const { answers } = await enrollUser(api, 'mjones', 'Welcome1!');
+        await afterEnrolment('mjones');
         const questions = await api('POST', '/api/password/reset/get-questions', { username: 'mjones' });
         const answerFor = new Map(answers.map((a) => [a.questionId, a.answer]));
         const verified = await api('POST', '/api/password/reset/verify-questions', {
@@ -97,6 +113,16 @@ describe('password-changed alert', () => {
         assert.equal(sent[0].to, 'mjones@example.local');
         assert.equal(sent[0].subject, 'Your password was reset');
         assert.match(sent[0].text, /verified with: security questions/);
+    });
+
+    test('enrolling sends a security alert naming the change', async () => {
+        await enrollUser(api, 'jsmith', 'Passw0rd!');
+        for (let i = 0; i < 50 && sent.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].to, 'jsmith@example.local');
+        assert.equal(sent[0].subject, 'Your password reset settings changed');
+        assert.match(sent[0].text, /enrolled for self-service password reset/);
+        assert.match(sent[0].text, /If this was NOT you, contact IT immediately/);
     });
 
     test('is skipped (and audited) when the account has no mail address', async () => {

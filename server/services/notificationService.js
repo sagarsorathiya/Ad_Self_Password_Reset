@@ -127,6 +127,94 @@ async function sendPasswordChangedAlert({ userId, username, method, req, sync, a
 }
 
 /**
+ * "Your recovery settings changed": factor added or replaced, questions changed, enrolment reset, admin rights.
+ * @param {object} p - { username, displayName, change, ip, userAgent, when }
+ */
+function securityChangeMessage({ username, displayName, change, ip, userAgent, when = new Date() }) {
+    return {
+        subject: 'Your password reset settings changed',
+        text: [
+            greeting(displayName, username),
+            '',
+            `${change} (account "${username}").`,
+            '',
+            `When:      ${dateTime.format(when)} (${TIME_ZONE})`,
+            `From IP:   ${ip || 'unknown'}`,
+            `Browser:   ${String(userAgent || 'unknown').slice(0, 200)}`,
+            '',
+            'If this was you, no action is needed.',
+            'If this was NOT you, contact IT immediately: someone else may be able to reset your password.',
+            ...portalLine(),
+            ...FOOTER,
+        ].join('\n'),
+    };
+}
+
+/**
+ * Security alert after a change to the user's recovery settings. Never throws.
+ * @param {object} p - { userId, username, change, req }
+ */
+async function sendSecurityChangeAlert({ userId, username, change, req }) {
+    if (!mailService.isEnabled()) return;
+    try {
+        const user = await ldapService.findUser(username);
+        if (!user?.mail) return;
+        const message = securityChangeMessage({
+            username, displayName: user.displayName, change, ip: req.ip, userAgent: req.headers?.['user-agent'],
+        });
+        await mailService.send({ to: user.mail, ...message });
+        await logAudit(userId, username, 'notification', null, req, true, `Security alert (${change}) sent to ${user.mail}`);
+    } catch (err) {
+        console.error(`[Mail] Security alert for ${username} failed: ${err.message}`);
+        await logAudit(userId, username, 'notification', null, req, false, `Security alert failed: ${err.message}`);
+    }
+}
+
+/**
+ * To every portal admin with a mail address after a protected setting changed. Never throws.
+ * @param {object} p - { actor, labels: string[], req, recipients: string[] }
+ */
+async function sendSettingChangedNotice({ actor, labels, req, recipients }) {
+    if (!mailService.isEnabled() || recipients.length === 0) return;
+    const text = [
+        `${actor} changed portal security settings: ${labels.join(', ')}.`,
+        '',
+        `When:      ${dateTime.format(new Date())} (${TIME_ZONE})`,
+        `From IP:   ${req.ip || 'unknown'}`,
+        '',
+        'If this change was not agreed, check Administration > Verification and the audit log now.',
+        ...portalLine(),
+        ...FOOTER,
+    ].join('\n');
+    try {
+        await mailService.send({ to: recipients.join(', '), subject: 'Portal security setting changed', text });
+        await logAudit(null, actor, 'notification', null, req, true, `Setting change notice sent to ${recipients.length} admin(s)`);
+    } catch (err) {
+        console.error(`[Mail] Setting change notice failed: ${err.message}`);
+        await logAudit(null, actor, 'notification', null, req, false, `Setting change notice failed: ${err.message}`);
+    }
+}
+
+/**
+ * After the password expired (reminders.expiredNotice).
+ * @param {object} p - { username, displayName, expiresAt, domain }
+ */
+function passwordExpiredMessage({ username, displayName, expiresAt, domain = null }) {
+    const which = domain ? `${domain} password` : 'password';
+    const where = config.mail.portalUrl ? `${config.mail.portalUrl} and choose "Forgot password"` : `${config.mail.portalName} ("Forgot password")`;
+    return {
+        subject: `Your ${which} has expired`,
+        text: [
+            greeting(displayName, username),
+            '',
+            `The ${which} for your account "${username}" expired on ${dateOnly.format(expiresAt)}.`,
+            `To set a new one, open ${where}.`,
+            ...FOOTER,
+        ].join('\n'),
+    };
+}
+
+/**
  * Body of the test mail an admin sends from Administration -> Mail & Reminders.
  * @param {object} p - { host, port, from, requestedBy }
  */
@@ -144,4 +232,13 @@ function testMessage({ host, port, from, requestedBy }) {
     ].join('\n');
 }
 
-module.exports = { passwordChangedMessage, passwordExpiringMessage, sendPasswordChangedAlert, testMessage };
+module.exports = {
+    passwordChangedMessage,
+    passwordExpiringMessage,
+    passwordExpiredMessage,
+    securityChangeMessage,
+    sendPasswordChangedAlert,
+    sendSecurityChangeAlert,
+    sendSettingChangedNotice,
+    testMessage,
+};

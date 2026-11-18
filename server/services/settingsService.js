@@ -42,11 +42,32 @@ function parseChoice(raw, label, allowed, canonical) {
     return value;
 }
 
+// Hosts the gateway may never be: the portal server itself (Test SMS shows the reply, so this would turn it
+// into a probe of local services) and link-local metadata addresses
+function isLocalHost(hostname) {
+    const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host === '0.0.0.0'
+        || /^127\./.test(host) || /^169\.254\./.test(host);
+}
+
 // The gateway URL may hold {placeholders}; they are substituted before the request is sent
 function parseUrlTemplate(raw) {
     const value = parseText(raw, 'SMS gateway URL', 1000);
     if (!value) return '';
     if (!/^https?:\/\//i.test(value)) throw invalid('The SMS gateway URL must start with http:// or https://.');
+    let hostname;
+    try {
+        hostname = new URL(value.replace(/\{\w+\}/g, 'x')).hostname;
+    } catch {
+        throw invalid('The SMS gateway URL is not a valid URL.');
+    }
+    if (isLocalHost(hostname)) throw invalid('The SMS gateway must be an external or intranet host, not this server.');
+    return value;
+}
+
+function parseRetention(raw) {
+    const value = parseInteger(raw, 'Audit log retention (days)', 0, 3650);
+    if (value > 0 && value < 30) throw invalid('Keep the audit log for at least 30 days (or 0 to keep it forever).');
     return value;
 }
 
@@ -93,6 +114,37 @@ const FIELDS = {
         group: 'security', name: 'questionCount', label: 'Security questions per user',
         parse: (v) => parseInteger(v, 'Security questions per user', 2, 5),
     },
+    'security.hideAccountState': {
+        group: 'security', name: 'hideAccountState', label: 'Hide account state on sign-in and reset',
+        parse: (v) => parseBoolean(v, 'Hide account state on sign-in and reset'),
+    },
+    'security.passwordMinLength': {
+        group: 'security', name: 'passwordMinLength', label: 'Minimum password length',
+        parse: (v) => parseInteger(v, 'Minimum password length', 8, 128),
+    },
+    'security.passwordComplexity': {
+        group: 'security', name: 'passwordComplexity', label: 'Password complexity (3 of 4 character types)',
+        parse: (v) => parseBoolean(v, 'Password complexity'),
+    },
+    'security.lockoutAttempts': {
+        group: 'security', name: 'lockoutAttempts', label: 'Failed reset attempts before lockout',
+        parse: (v) => parseInteger(v, 'Failed reset attempts before lockout', 3, 20),
+    },
+    'security.lockoutMinutes': {
+        group: 'security', name: 'lockoutMinutes', label: 'Reset lockout duration (minutes)',
+        parse: (v) => parseInteger(v, 'Reset lockout duration (minutes)', 5, 1440),
+    },
+    'reset.policy': {
+        group: 'reset', name: 'policy', label: 'Reset verification policy',
+        parse: (v) => parseChoice(v, 'Reset verification policy', ['both', 'totp_only', 'either'], (x) => x.toLowerCase()),
+    },
+    'audit.retentionDays': {
+        group: 'audit', name: 'retentionDays', label: 'Audit log retention (days)', parse: (v) => parseRetention(v),
+    },
+    'reminders.expiredNotice': {
+        group: 'reminders', name: 'expiredNotice', label: 'Mail after the password expired',
+        parse: (v) => parseBoolean(v, 'Mail after the password expired'),
+    },
     'factors.totp': {
         group: 'factors', name: 'totp', label: 'Authenticator app (TOTP)',
         parse: (v) => parseBoolean(v, 'Authenticator app (TOTP)'),
@@ -101,7 +153,8 @@ const FIELDS = {
         group: 'factors', name: 'sms', label: 'SMS one-time code',
         parse: (v) => parseBoolean(v, 'SMS one-time code'),
     },
-    'sms.url': { group: 'sms', name: 'url', label: 'SMS gateway URL', parse: (v) => parseUrlTemplate(v) },
+    // Secret: gateways often take the account name, password or API key in the query string
+    'sms.url': { group: 'sms', name: 'url', label: 'SMS gateway URL', secret: true, parse: (v) => parseUrlTemplate(v) },
     'sms.method': {
         group: 'sms', name: 'method', label: 'SMS request method',
         parse: (v) => parseChoice(v, 'SMS request method', ['GET', 'POST'], (x) => x.toUpperCase()),
@@ -133,6 +186,14 @@ const FIELDS = {
         },
     },
     'sms.successText': { group: 'sms', name: 'successText', label: 'Success text in the reply', parse: (v) => parseText(v, 'Success text in the reply', 100) },
+    'sms.dailyLimitPerUser': {
+        group: 'sms', name: 'dailyLimitPerUser', label: 'Texts per user per day',
+        parse: (v) => parseInteger(v, 'Texts per user per day', 1, 100),
+    },
+    'sms.dailyLimitTotal': {
+        group: 'sms', name: 'dailyLimitTotal', label: 'Texts per day for the whole portal',
+        parse: (v) => parseInteger(v, 'Texts per day for the whole portal', 10, 100000),
+    },
     'reminders.source': {
         group: 'reminders', name: 'source', label: 'Expiry source',
         parse: (v) => {
@@ -144,6 +205,15 @@ const FIELDS = {
     },
 };
 
+// Changing one of these can redirect or weaken identity verification, so it needs a member of
+// AD_ADMIN_GROUP who confirms their Windows password (adminController.updateSettings)
+const PROTECTED_KEYS = new Set([
+    'reset.policy', 'factors.totp', 'factors.sms', 'sms.url', 'sms.headers', 'sms.method', 'sms.bodyTemplate',
+]);
+
+// iv:authTag:ciphertext, as written by cryptoService.encrypt
+const ENCRYPTED = /^[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]*$/i;
+
 function defaults() {
     return {
         mail: { ...config.mail },
@@ -151,6 +221,8 @@ function defaults() {
         security: { ...config.security },
         factors: { ...config.factors },
         sms: { ...config.sms },
+        reset: { ...config.reset },
+        audit: { ...config.audit },
         // Keys whose value comes from the database rather than .env
         overrides: [],
     };
@@ -160,6 +232,14 @@ let snapshot = defaults();
 
 function current() {
     return snapshot;
+}
+
+/**
+ * Effective reset policy. Without a stored value the live config is read, so tests that set
+ * config.reset.policy at runtime keep working unchanged.
+ */
+function resetPolicy() {
+    return snapshot.overrides.includes('reset.policy') ? snapshot.reset.policy : config.reset.policy;
 }
 
 /**
@@ -182,7 +262,16 @@ async function refresh() {
         const field = FIELDS[row.key];
         if (!field) continue;
         try {
-            const stored = field.secret ? cryptoService.decrypt(row.value) : row.value;
+            let stored = row.value;
+            if (field.secret) {
+                if (ENCRYPTED.test(String(row.value))) {
+                    stored = cryptoService.decrypt(row.value);
+                } else if (row.value) {
+                    // Saved before this field was secret: keep using it, and encrypt it in place now
+                    await db.query('UPDATE app_settings SET value = $1 WHERE key = $2', [cryptoService.encrypt(row.value), row.key]);
+                    console.log(`[Settings] Encrypted stored "${row.key}"`);
+                }
+            }
             next[field.group][field.name] = field.deserialize ? field.deserialize(stored) : field.parse(stored);
             next.overrides.push(row.key);
         } catch (err) {
@@ -252,6 +341,8 @@ function previewMerge(writes) {
         security: { ...snapshot.security },
         factors: { ...snapshot.factors },
         sms: { ...snapshot.sms },
+        reset: { ...snapshot.reset },
+        audit: { ...snapshot.audit },
     };
     for (const [key, value] of writes) {
         const field = FIELDS[key];
@@ -259,6 +350,30 @@ function previewMerge(writes) {
         merged[field.group][field.name] = field.deserialize ? field.deserialize(plain) : field.parse(plain);
     }
     return merged;
+}
+
+/**
+ * The protected keys whose value would actually change. Placeholders and values that do not parse are skipped:
+ * save() reports those itself.
+ * @param {object} values - the same flat map save() takes
+ * @returns {string[]}
+ */
+function protectedChanges(values) {
+    const changed = [];
+    for (const [key, raw] of Object.entries(values || {})) {
+        if (!PROTECTED_KEYS.has(key)) continue;
+        const field = FIELDS[key];
+        if (field.secret && raw === SECRET_PLACEHOLDER) continue;
+        let parsed;
+        try {
+            parsed = field.parse(raw);
+        } catch {
+            continue;
+        }
+        const current = key === 'reset.policy' ? resetPolicy() : snapshot[field.group][field.name];
+        if (JSON.stringify(parsed) !== JSON.stringify(current)) changed.push(key);
+    }
+    return changed;
 }
 
 /**
@@ -284,9 +399,14 @@ async function describe() {
         factors: { ...settings.factors },
         sms: {
             ...settings.sms,
-            // Holds the gateway API key; like the SMTP password it is only ever returned masked
+            // URL and headers hold the gateway credentials; like the SMTP password they are only ever returned masked
+            url: settings.sms.url ? SECRET_PLACEHOLDER : '',
             headers: settings.sms.headers ? SECRET_PLACEHOLDER : '',
+            // Required here, not at the top: smsService itself requires this module
+            urlHint: require('./smsService').describeGateway(),
         },
+        reset: { policy: resetPolicy() },
+        audit: { ...settings.audit },
         // From .env, shown read-only: these are not editable in the panel
         envDefaults: {
             host: config.mail.host,
@@ -299,7 +419,9 @@ async function describe() {
             enabled: config.reminders.enabled,
             factorTotp: config.factors.totp,
             factorSms: config.factors.sms,
-            smsUrl: config.sms.url,
+            smsUrl: config.sms.url ? SECRET_PLACEHOLDER : '',
+            resetPolicy: config.reset.policy,
+            hideAccountState: config.security.hideAccountState,
         },
         secondaryDomain: config.ad.secondary ? config.ad.secondary.name : null,
         primaryDomain: config.ad.name,
@@ -308,4 +430,6 @@ async function describe() {
     };
 }
 
-module.exports = { current, refresh, save, describe, SECRET_PLACEHOLDER, FIELDS };
+module.exports = {
+    current, refresh, save, describe, resetPolicy, protectedChanges, SECRET_PLACEHOLDER, FIELDS, PROTECTED_KEYS,
+};

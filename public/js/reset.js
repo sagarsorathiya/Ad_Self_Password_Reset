@@ -14,8 +14,13 @@
     bindPasswordStrength(
         document.getElementById('newPassword'),
         document.getElementById('strength'),
-        document.getElementById('reqList')
+        document.getElementById('reqList'),
+        () => ({ username: state.username })
     );
+
+    // Coming from the sign-in page after "password expired": the username is already known
+    const prefill = new URLSearchParams(window.location.search).get('username');
+    if (prefill) document.getElementById('username').value = prefill.slice(0, 256);
 
     document.querySelectorAll('[data-back]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -71,10 +76,11 @@
             state.mobileMasked = data.mobileMasked || '';
             document.getElementById('totpStepHint').classList.add('hidden');
             document.getElementById('smsStepHint').classList.add('hidden');
-            if (state.mobileMasked) {
-                document.getElementById('smsMethodHint').textContent =
-                    `We text a 6-digit code to ${state.mobileMasked}.`;
-            }
+            document.getElementById('smsMethodHint').textContent = state.mobileMasked
+                ? `We text a 6-digit code to ${state.mobileMasked}.`
+                : 'We text a 6-digit code to your mobile number.';
+            // The portal hides which methods this account has: say that a method only works if it was set up
+            document.querySelectorAll('.method-card-note').forEach((note) => note.classList.toggle('hidden', !data.generic));
 
             if (state.methods.length === 0) {
                 setFieldError(usernameInput, 'No verification methods are available for this account. Contact your administrator.');
@@ -172,7 +178,7 @@
             wrapper.innerHTML = `
                 <input class="form-input" type="password" id="sqAnswer${i}" data-question-id="${Number(q.id)}"
                        maxlength="256" autocomplete="off" placeholder="Your answer">
-                <button type="button" class="password-toggle" aria-label="Show answer">👁️</button>`;
+                <button type="button" class="password-toggle" aria-label="Show answer">Show</button>`;
 
             const error = document.createElement('div');
             error.className = 'form-error';
@@ -402,7 +408,7 @@
         clearFieldErrors(pwForm);
 
         let valid = true;
-        if (!meetsComplexity(newPw.value)) {
+        if (!meetsComplexity(newPw.value, { username: state.username })) {
             setFieldError(newPw, 'Password does not meet the complexity requirements.');
             valid = false;
         }
@@ -422,6 +428,7 @@
             const syncWarning = document.getElementById('doneSyncWarning');
             syncWarning.textContent = res.data?.sync?.status === 'failed' ? res.message : '';
             syncWarning.classList.toggle('hidden', res.data?.sync?.status !== 'failed');
+            document.getElementById('doneUnlocked').classList.toggle('hidden', !res.data?.unlocked);
             state.resetToken = null;
             clearInterval(countdownTimer);
             pwForm.reset();

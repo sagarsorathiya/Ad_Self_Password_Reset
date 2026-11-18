@@ -1,11 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const passwordController = require('../controllers/passwordController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireActiveSession } = require('../middleware/auth');
 const { resetLimiter, verifyLimiter, smsLimiter } = require('../middleware/rateLimiter');
 
 // Authenticated password change
-router.post('/change', authenticate, passwordController.changePassword);
+// verifyLimiter: every wrong current password is a bad-password count in AD
+router.post('/change', authenticate, requireActiveSession, verifyLimiter, passwordController.changePassword);
+
+// Password rules shown on the change and reset pages (no sign-in needed)
+router.get('/rules', passwordController.getRules);
 
 // Forgot password flow (unauthenticated)
 router.post('/reset/verify-user', resetLimiter, passwordController.verifyUser);

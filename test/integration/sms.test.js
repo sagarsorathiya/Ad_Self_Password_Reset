@@ -348,7 +348,7 @@ describe('SMS one-time codes', () => {
         await enrollWithSms(WITH_MOBILE);
         const { token: adminToken } = await login(api, 'admin', 'Adm1nPass!');
 
-        const off = await api('PUT', '/api/admin/settings', {
+        const off = await api('PUT', '/api/admin/settings', { currentPassword: 'Adm1nPass!',
             settings: { 'factors.sms': 'false', 'factors.totp': 'true' },
         }, adminToken);
         assert.equal(off.status, 200, off.body.message);
@@ -368,19 +368,19 @@ describe('SMS one-time codes', () => {
         assert.equal(setup.body.code, 'FACTOR_DISABLED');
 
         // Restored for the tests that follow in this file
-        await api('PUT', '/api/admin/settings', { settings: { 'factors.sms': 'true' } }, adminToken);
+        await api('PUT', '/api/admin/settings', { currentPassword: 'Adm1nPass!', settings: { 'factors.sms': 'true' } }, adminToken);
     });
 
     test('at least one second factor must stay enabled, and SMS needs a gateway', async () => {
         const { token } = await login(api, 'admin', 'Adm1nPass!');
 
-        const none = await api('PUT', '/api/admin/settings', {
+        const none = await api('PUT', '/api/admin/settings', { currentPassword: 'Adm1nPass!',
             settings: { 'factors.totp': 'false', 'factors.sms': 'false' },
         }, token);
         assert.equal(none.status, 400);
         assert.match(none.body.message, /at least one second factor/i);
 
-        const noGateway = await api('PUT', '/api/admin/settings', {
+        const noGateway = await api('PUT', '/api/admin/settings', { currentPassword: 'Adm1nPass!',
             settings: { 'factors.sms': 'true', 'sms.url': '' },
         }, token);
         assert.equal(noGateway.status, 400);
@@ -389,7 +389,7 @@ describe('SMS one-time codes', () => {
 
     test('the gateway request fills in the template and escapes what it substitutes', async () => {
         const { token } = await login(api, 'admin', 'Adm1nPass!');
-        const saved = await api('PUT', '/api/admin/settings', {
+        const saved = await api('PUT', '/api/admin/settings', { currentPassword: 'Adm1nPass!',
             settings: {
                 'sms.url': 'https://gw.example.test/send',
                 'sms.method': 'POST',
@@ -419,7 +419,7 @@ describe('SMS one-time codes', () => {
 
     test('a GET gateway URL percent-encodes the number and the message', async () => {
         const { token } = await login(api, 'admin', 'Adm1nPass!');
-        await api('PUT', '/api/admin/settings', {
+        await api('PUT', '/api/admin/settings', { currentPassword: 'Adm1nPass!',
             settings: {
                 'sms.url': 'https://gw.example.test/send?to={mobile}&text={message}',
                 'sms.method': 'GET',
@@ -442,7 +442,7 @@ describe('SMS one-time codes', () => {
         const bad = await api('POST', '/api/admin/settings/test-sms', { to: 'abc' }, token);
         assert.equal(bad.status, 400);
 
-        await api('PUT', '/api/admin/settings', {
+        await api('PUT', '/api/admin/settings', { currentPassword: 'Adm1nPass!',
             settings: { 'sms.messageTemplate': '{otp}-is-OTP-For-Access-OF-VPN' },
         }, token);
 

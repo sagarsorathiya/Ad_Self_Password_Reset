@@ -42,6 +42,7 @@
     const sections = ['manageView', 'step1', 'step2', 'step3'];
 
     document.getElementById('content').classList.remove('hidden');
+    document.getElementById('adminAccountNotice').classList.toggle('hidden', status.selfServiceReset !== false);
     document.querySelectorAll('.reauth-group').forEach((g) => initPasswordToggles(g));
     initSecurityQuestions();
     initTotp();
@@ -128,6 +129,106 @@
         back.addEventListener('click', startSecondFactor);
     }
 
+    // ---- Fresh sign-in for first-time setup ----
+
+    /**
+     * Runs a setup call; when the server wants a recent sign-in first (RECENT_AUTH_REQUIRED: an account that is
+     * not enrolled yet, signed in more than 15 minutes ago), asks for the Windows password once and retries.
+     */
+    async function withRecentAuth(call) {
+        try {
+            return await call();
+        } catch (err) {
+            if (err.code !== 'RECENT_AUTH_REQUIRED') throw err;
+            if (!(await confirmPasswordDialog(err.message))) throw err;
+            return call();
+        }
+    }
+
+    // Built with DOM methods only; resolves true once /api/auth/reauth accepted the password
+    function confirmPasswordDialog(message) {
+        return new Promise((resolve) => {
+            const opener = document.activeElement;
+            const backdrop = document.createElement('div');
+            backdrop.className = 'modal-backdrop';
+            const modal = document.createElement('form');
+            modal.className = 'modal';
+            modal.noValidate = true;
+            modal.setAttribute('role', 'dialog');
+            modal.setAttribute('aria-modal', 'true');
+            modal.setAttribute('aria-labelledby', 'reauthTitle');
+
+            const title = document.createElement('h2');
+            title.className = 'modal-title';
+            title.id = 'reauthTitle';
+            title.textContent = 'Confirm your password';
+            const text = document.createElement('p');
+            text.className = 'text-sm text-muted mb-4';
+            text.textContent = message;
+
+            const group = document.createElement('div');
+            group.className = 'form-group';
+            const label = document.createElement('label');
+            label.className = 'form-label';
+            label.htmlFor = 'reauthPassword';
+            label.textContent = 'Windows password';
+            const input = document.createElement('input');
+            input.className = 'form-input';
+            input.type = 'password';
+            input.id = 'reauthPassword';
+            input.autocomplete = 'current-password';
+            input.maxLength = 256;
+            const error = document.createElement('div');
+            error.className = 'form-error';
+            group.append(label, input, error);
+
+            const row = document.createElement('div');
+            row.className = 'btn-row';
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn btn-secondary';
+            cancelBtn.textContent = 'Cancel';
+            const okBtn = document.createElement('button');
+            okBtn.type = 'submit';
+            okBtn.className = 'btn btn-primary';
+            okBtn.textContent = 'Continue';
+            row.append(cancelBtn, okBtn);
+
+            modal.append(title, text, group, row);
+            backdrop.appendChild(modal);
+
+            const close = (result) => {
+                backdrop.remove();
+                document.removeEventListener('keydown', onKey);
+                opener?.focus?.();
+                resolve(result);
+            };
+            const onKey = (e) => { if (e.key === 'Escape') close(false); };
+            cancelBtn.addEventListener('click', () => close(false));
+            modal.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                setFieldError(input, '');
+                if (!input.value) {
+                    setFieldError(input, 'Enter your Windows password.');
+                    return;
+                }
+                setButtonLoading(okBtn, true, 'Checking...');
+                try {
+                    const { data } = await api('POST', '/api/auth/reauth', { password: input.value });
+                    setToken(data.token);
+                    close(true);
+                } catch (err) {
+                    setButtonLoading(okBtn, false);
+                    setFieldError(input, err.message);
+                    input.select();
+                }
+            });
+            document.addEventListener('keydown', onKey);
+            document.body.appendChild(backdrop);
+            input.focus();
+        });
+    }
+
     // ---- Management view (enrolled) ----
 
     function showOverview() {
@@ -177,11 +278,12 @@
         badge.className = `badge ${status.smsEnabled ? 'badge-success' : 'badge-warning'}`;
 
         setSmsCardText(status.mobile?.masked || '');
+        const changed = Boolean(status.mobile?.changedInDirectory);
 
         document.getElementById('smsReauthGroup').classList.toggle('hidden', !needsPassword(status.smsEnabled));
-        document.getElementById('smsManageBtn').textContent = status.smsEnabled
-            ? 'Change mobile number'
-            : 'Send a code to this number';
+        document.getElementById('smsManageBtn').textContent = changed
+            ? 'Confirm the new number'
+            : status.smsEnabled ? 'Change mobile number' : 'Send a code to this number';
     }
 
     /**
@@ -192,6 +294,12 @@
     function setSmsCardText(known) {
         const target = document.getElementById('smsManageText');
         target.textContent = '';
+
+        if (status.mobile?.changedInDirectory) {
+            target.textContent = 'The mobile number in the directory changed after you set up text messages, so no '
+                + 'codes are sent until you confirm the new number.';
+            return;
+        }
 
         if (!known) {
             target.textContent = 'Add a mobile number to receive one-time codes by text message.';
@@ -287,7 +395,7 @@
                     <label class="form-label" for="a${i}">Answer</label>
                     <div class="password-wrapper">
                         <input class="form-input" type="password" id="a${i}" maxlength="256" autocomplete="off">
-                        <button type="button" class="password-toggle" aria-label="Show answer">👁️</button>
+                        <button type="button" class="password-toggle" aria-label="Show answer">Show</button>
                     </div>
                     <div class="form-error"></div>
                 </div>`;
@@ -351,7 +459,7 @@
 
             setButtonLoading(submitBtn, true, 'Saving...');
             try {
-                await api('POST', '/api/enrollment/security-questions', body);
+                await withRecentAuth(() => api('POST', '/api/enrollment/security-questions', body));
                 pwInput.value = '';
                 status.securityQuestionsSet = true;
                 myQuestions = answers.map((a) => ({
@@ -473,7 +581,7 @@
             clearFieldErrors(document.getElementById('totpForm'));
             setupError.classList.add('hidden');
 
-            const { data } = await api('POST', '/api/enrollment/totp/setup', currentPassword ? { currentPassword } : {});
+            const { data } = await withRecentAuth(() => api('POST', '/api/enrollment/totp/setup', currentPassword ? { currentPassword } : {}));
             document.getElementById('qrImage').src = data.qrCode;
             document.getElementById('manualKey').textContent = data.secret.replace(/(.{4})/g, '$1 ').trim();
             setTimeout(() => document.getElementById('totpCode').focus(), 0);
@@ -502,8 +610,8 @@
         const codeInput = document.getElementById('smsCode');
 
         document.getElementById('smsOtherNumberBtn').addEventListener('click', () => {
-            document.getElementById('smsDirectoryHint').style.display = 'none';
-            document.getElementById('smsMobileGroup').style.display = '';
+            document.getElementById('smsDirectoryHint').classList.add('hidden');
+            document.getElementById('smsMobileGroup').classList.remove('hidden');
             document.getElementById('smsMobile').focus();
         });
 
@@ -514,7 +622,7 @@
         mobileForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const input = document.getElementById('smsMobile');
-            const visible = document.getElementById('smsMobileGroup').style.display !== 'none';
+            const visible = !document.getElementById('smsMobileGroup').classList.contains('hidden');
             clearFieldErrors(mobileForm);
             if (visible && !input.value.trim()) {
                 setFieldError(input, 'Enter your mobile number, including the country code.');
@@ -576,8 +684,8 @@
         // A number already on the account is offered first; only users without one have to type it
         const known = !isReplacement && status.mobile?.masked;
         document.getElementById('smsKnownNumber').textContent = known || '';
-        document.getElementById('smsDirectoryHint').style.display = known ? '' : 'none';
-        document.getElementById('smsMobileGroup').style.display = known ? 'none' : '';
+        document.getElementById('smsDirectoryHint').classList.toggle('hidden', !known);
+        document.getElementById('smsMobileGroup').classList.toggle('hidden', Boolean(known));
     }
 
     /**
@@ -591,7 +699,7 @@
         if (currentPassword) body.currentPassword = currentPassword;
 
         try {
-            const { data } = await api('POST', '/api/enrollment/sms/setup', body);
+            const { data } = await withRecentAuth(() => api('POST', '/api/enrollment/sms/setup', body));
             document.getElementById('smsSentTo').textContent = data.mobileMasked;
             document.getElementById('smsMobileForm').classList.add('hidden');
             document.getElementById('smsForm').classList.remove('hidden');
@@ -602,8 +710,8 @@
         } catch (err) {
             if (err.code === 'MOBILE_REQUIRED') {
                 // Expected for everyone without a number in the directory: ask for one
-                document.getElementById('smsDirectoryHint').style.display = 'none';
-                document.getElementById('smsMobileGroup').style.display = '';
+                document.getElementById('smsDirectoryHint').classList.add('hidden');
+                document.getElementById('smsMobileGroup').classList.remove('hidden');
                 document.getElementById('smsMobileForm').classList.remove('hidden');
                 document.getElementById('smsForm').classList.add('hidden');
                 document.getElementById('smsMobile').focus();

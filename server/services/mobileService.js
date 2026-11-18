@@ -79,9 +79,12 @@ function decoyMask(username) {
 
 /**
  * The number codes should go to right now.
- * @param {object} dbUser - users row with mobile_source and mobile_number
+ * A directory number is accepted only while it is the one the user verified (users.mobile_verified_hash): a
+ * later change of the AD mobile attribute, by whoever can write it, must not silently redirect codes.
+ * @param {object} dbUser - users row with mobile_source, mobile_number and mobile_verified_hash
  * @param {object|null} adUser - the AD entry, when it has already been fetched
- * @returns {{number: string, source: 'ad'|'portal'}|null}
+ * @returns {{number: string|null, source: 'ad'|'portal', changed?: true}|null}
+ *   number null + changed = the AD number differs from the verified one; nothing may be sent to it
  */
 function resolve(dbUser, adUser) {
     if (dbUser?.mobile_source === 'portal' && dbUser.mobile_number) {
@@ -89,7 +92,13 @@ function resolve(dbUser, adUser) {
         if (number) return { number, source: 'portal' };
     }
     const fromDirectory = normalize(adUser?.mobile);
-    if (fromDirectory) return { number: fromDirectory, source: 'ad' };
+    if (fromDirectory) {
+        const pinned = dbUser?.mobile_source === 'ad' && dbUser.mobile_verified_hash;
+        if (pinned && cryptoService.hmac(fromDirectory) !== dbUser.mobile_verified_hash) {
+            return { number: null, source: 'ad', changed: true };
+        }
+        return { number: fromDirectory, source: 'ad' };
+    }
     return null;
 }
 

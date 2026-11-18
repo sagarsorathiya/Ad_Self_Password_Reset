@@ -207,7 +207,10 @@ describe('expiry reminders from the second domain (PASSWORD_REMINDER_SOURCE=seco
         mailExpiresIn('mjones', 3);
         mockAd.setAttributes('mjones', { userAccountControl: '514' }); // disabled in the first domain
         mailExpiresIn('secondary.only', 3);                          // no first-domain account at all
+        mockAd.calls.findUser = 0;
         const result = await reminders.runOnce();
+        // One listing of the first domain, not one lookup (connection + bind) per account
+        assert.equal(mockAd.calls.findUser, 0);
         assert.equal(result.due.length, 0);
         assert.equal(sent.length, 0);
         assert.equal(result.expiring, 3);

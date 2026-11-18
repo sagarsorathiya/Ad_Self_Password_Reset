@@ -29,10 +29,11 @@ function currentStage(daysLeft, days = settingsService.current().reminders.days)
  * For a second-domain expiry: the first-domain account that receives the reminder, or null when a portal
  * change would not help (the sync refuses that account, or the user cannot sign in to the portal).
  */
-async function signInAccount(entry) {
+async function signInAccount(entry, accounts) {
     const refusal = passwordSyncService.refusalReason({ ...entry, sAMAccountName: entry.username });
     if (refusal) return { skip: `${ldapService.secondary.name}: ${refusal}` };
-    const user = await ldapService.findUser(entry.username);
+    // One paged search of the first domain per run, instead of one connection and bind per account
+    const user = accounts.get(String(entry.username).toLowerCase());
     if (!user) return { skip: `no ${config.ad.name} account` };
     if ((parseInt(user.userAccountControl, 10) & UAC_ACCOUNT_DISABLED) !== 0) return { skip: `${config.ad.name} account disabled` };
     if (!user.mail) return { skip: `no mail address in ${config.ad.name}` };
@@ -50,10 +51,12 @@ function countSkip(result, reason) {
  */
 async function runOnce({ now = new Date(), dryRun = false } = {}) {
     // Picks up an admin change (stages, source) made since the last run
-    const { days, source: expirySource } = (await settingsService.refresh()).reminders;
+    const { days, source: expirySource, expiredNotice } = (await settingsService.refresh()).reminders;
     const fromSecondary = expirySource === 'secondary';
     const source = fromSecondary ? ldapService.secondary : ldapService;
     const entries = await source.listPasswordExpiries();
+    // First-domain accounts, loaded only once a second-domain entry actually needs one
+    let accounts = null;
     // withExpiry/expired: every account the source reports; inWindow: has reached a stage;
     // expiring: in the window and not yet reminded; skipped: reason → count (second-domain source)
     const result = {
@@ -65,13 +68,17 @@ async function runOnce({ now = new Date(), dryRun = false } = {}) {
         if (!entry.expiresAt) continue;
         result.withExpiry++;
         const daysLeft = Math.ceil((entry.expiresAt - now) / DAY_MS);
+        let stage;
         if (daysLeft <= 0) {
             result.expired++;
-            continue;
+            // Optional "has expired" mail, stage 0, within a week of the expiry
+            if (!expiredNotice || daysLeft <= -7) continue;
+            stage = 0;
+        } else {
+            stage = currentStage(daysLeft, days);
+            if (stage === null) continue;
+            result.inWindow++;
         }
-        const stage = currentStage(daysLeft, days);
-        if (stage === null) continue;
-        result.inWindow++;
 
         const already = await db.query(
             'SELECT sent_at FROM password_reminders WHERE username = $1 AND expires_at = $2 AND days_before = $3',
@@ -88,7 +95,8 @@ async function runOnce({ now = new Date(), dryRun = false } = {}) {
         result.expiring++;
         let user = entry;
         if (fromSecondary) {
-            const account = await signInAccount(entry);
+            accounts ??= await ldapService.listSignInAccounts();
+            const account = await signInAccount(entry, accounts);
             if (account.skip) {
                 countSkip(result, account.skip);
                 continue;
@@ -109,7 +117,7 @@ async function runOnce({ now = new Date(), dryRun = false } = {}) {
         try {
             await mailService.send({
                 to: user.mail,
-                ...notificationService.passwordExpiringMessage({
+                ...(stage === 0 ? notificationService.passwordExpiredMessage : notificationService.passwordExpiringMessage)({
                     ...user,
                     expiresAt: entry.expiresAt,
                     daysLeft,
@@ -118,7 +126,7 @@ async function runOnce({ now = new Date(), dryRun = false } = {}) {
             });
             result.sent++;
             await logAudit(null, user.username, 'password_reminder', null, NO_REQUEST, true,
-                `Expires in ${daysLeft} day(s); reminder sent to ${user.mail}`);
+                stage === 0 ? `Expired; notice sent to ${user.mail}` : `Expires in ${daysLeft} day(s); reminder sent to ${user.mail}`);
         } catch (err) {
             // Released so the next run retries
             await db.query(

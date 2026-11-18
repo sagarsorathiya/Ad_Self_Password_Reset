@@ -8,8 +8,9 @@
 
     renderNavbar(user, 'admin');
     document.getElementById('content').classList.remove('hidden');
+    initPasswordToggles();
 
-    const usersState = { page: 1, limit: 25, search: '', filter: 'all' };
+    const usersState = { page: 1, limit: 25, search: '', filter: 'all', sort: 'created' };
     const auditState = { page: 1, limit: 50, username: '', action: '', startDate: '', endDate: '' };
     const loadedTabs = new Set();
     // Mail, reminder and security settings, shared by the Questions and Mail tabs
@@ -17,22 +18,43 @@
 
     // ---- Tabs ----
 
-    document.querySelectorAll('#mainTabs .filter-tab').forEach((tab) => {
+    const tabButtons = [...document.querySelectorAll('#mainTabs .filter-tab')];
+    tabButtons.forEach((tab) => {
         tab.addEventListener('click', () => switchTab(tab.dataset.tab));
     });
 
+    // Arrow keys move between tabs (WAI-ARIA tabs pattern); Home/End jump to the first/last one
+    document.getElementById('mainTabs').addEventListener('keydown', (e) => {
+        const index = tabButtons.indexOf(document.activeElement);
+        if (index === -1) return;
+        const next = {
+            ArrowRight: (index + 1) % tabButtons.length,
+            ArrowLeft: (index - 1 + tabButtons.length) % tabButtons.length,
+            Home: 0,
+            End: tabButtons.length - 1,
+        }[e.key];
+        if (next === undefined) return;
+        e.preventDefault();
+        tabButtons[next].focus();
+        switchTab(tabButtons[next].dataset.tab);
+    });
+
     function switchTab(name) {
-        document.querySelectorAll('#mainTabs .filter-tab').forEach((t) => {
+        tabButtons.forEach((t) => {
             const active = t.dataset.tab === name;
             t.classList.toggle('active', active);
             t.setAttribute('aria-selected', String(active));
+            t.tabIndex = active ? 0 : -1;
         });
         ['users', 'audit', 'questions', 'exceptions', 'verification', 'mail'].forEach((n) => {
             document.getElementById(`tab-${n}`).classList.toggle('hidden', n !== name);
         });
         if (!loadedTabs.has(name)) {
             loadedTabs.add(name);
-            if (name === 'audit') loadAudit();
+            if (name === 'audit') {
+                loadAudit();
+                loadSettings();
+            }
             if (name === 'questions') loadQuestions();
             if (name === 'exceptions') loadExceptions();
             // Both tabs edit the same settings document, so either one can load it
@@ -74,6 +96,12 @@
         });
     });
 
+    document.getElementById('userSort').addEventListener('change', (e) => {
+        usersState.sort = e.target.value;
+        usersState.page = 1;
+        loadUsers();
+    });
+
     async function loadUsers() {
         setTableMessage(usersBody, 8, 'Loading...');
         try {
@@ -83,6 +111,7 @@
                 filter: usersState.filter,
             });
             if (usersState.search) params.set('search', usersState.search);
+            if (usersState.sort !== 'created') params.set('sort', usersState.sort);
 
             const { data } = await api('GET', `/api/admin/users?${params}`);
             renderUsers(data.users);
@@ -116,7 +145,7 @@
                 <td>${yesNo(u.security_questions_set)}</td>
                 <td>${escapeHtml(secondFactors(u))}</td>
                 <td>${Number(u.failed_attempts) || 0}</td>
-                <td>${escapeHtml(formatDate(u.updated_at))}</td>
+                <td>${escapeHtml(formatDate(u.last_activity))}</td>
                 <td>
                     <div class="table-actions">
                         <button class="btn btn-secondary btn-sm" data-action="lock" data-id="${Number(u.id)}"
@@ -338,7 +367,7 @@
     }
 
     async function loadQuestions() {
-        setTableMessage(questionsBody, 4, 'Loading...');
+        setTableMessage(questionsBody, 5, 'Loading...');
         try {
             const { data } = await api('GET', '/api/admin/settings');
             settingsCache = data;
@@ -351,19 +380,20 @@
             questionsCache = data;
             renderQuestions();
         } catch (err) {
-            setTableMessage(questionsBody, 4, err.message);
+            setTableMessage(questionsBody, 5, err.message);
         }
     }
 
     function renderQuestions() {
         if (questionsCache.length === 0) {
-            setTableMessage(questionsBody, 4, 'No security questions defined.');
+            setTableMessage(questionsBody, 5, 'No security questions defined.');
             return;
         }
         questionsBody.innerHTML = questionsCache.map((q) => `
             <tr>
                 <td>${Number(q.sort_order) || 0}</td>
-                <td style="white-space: normal;">${escapeHtml(q.question_text)}</td>
+                <td class="wrap">${escapeHtml(q.question_text)}</td>
+                <td>${Number(q.answer_count) || 0}</td>
                 <td>${q.is_active
                     ? '<span class="badge badge-success">Active</span>'
                     : '<span class="badge badge-warning">Inactive</span>'}</td>
@@ -416,6 +446,15 @@
         const orderInput = body.querySelector('#qOrder');
         textInput.value = question?.question_text || '';
         orderInput.value = question?.sort_order ?? nextSortOrder();
+        // Rewording a question people answered would change what their answers mean (the server refuses it too)
+        const inUse = Number(question?.answer_count) || 0;
+        if (inUse > 0) {
+            textInput.readOnly = true;
+            const hint = document.createElement('div');
+            hint.className = 'form-hint';
+            hint.textContent = `Answered by ${inUse} user(s), so the text cannot change. Deactivate it and add a new question instead.`;
+            textInput.closest('.form-group').appendChild(hint);
+        }
 
         openModal({
             title: isEdit ? 'Edit Question' : 'Add Question',
@@ -476,7 +515,7 @@
         }
         exceptionsBody.innerHTML = exceptionsCache.map((x) => `
             <tr>
-                <td style="white-space: normal;"><strong>${escapeHtml(x.term)}</strong></td>
+                <td class="wrap"><strong>${escapeHtml(x.term)}</strong></td>
                 <td>${x.match_type === 'exact' ? 'Exact password' : 'Contains'}</td>
                 <td>${x.is_active
                     ? '<span class="badge badge-success">Active</span>'
@@ -586,8 +625,8 @@
         const backdrop = document.createElement('div');
         backdrop.className = 'modal-backdrop';
         backdrop.innerHTML = `
-            <div class="modal" role="dialog" aria-modal="true">
-                <h2 class="modal-title"></h2>
+            <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+                <h2 class="modal-title" id="modalTitle"></h2>
                 <div class="modal-body"></div>
                 <div class="btn-row">
                     <button type="button" class="btn btn-secondary" data-role="cancel">Cancel</button>
@@ -601,9 +640,12 @@
         else bodyEl.appendChild(content);
 
         const confirmBtn = backdrop.querySelector('[data-role="confirm"]');
+        // Focus returns where it was when the modal closes
+        const opener = document.activeElement;
         const close = () => {
             backdrop.remove();
             document.removeEventListener('keydown', onKey);
+            opener?.focus?.();
         };
         const cancel = () => {
             close();
@@ -615,7 +657,26 @@
             if (shouldClose !== false) close();
             else setButtonLoading(confirmBtn, false);
         };
-        const onKey = (e) => { if (e.key === 'Escape') cancel(); };
+        const onKey = (e) => {
+            if (e.key === 'Escape') {
+                cancel();
+                return;
+            }
+            if (e.key !== 'Tab') return;
+            // Keep keyboard focus inside the dialog
+            const focusable = [...backdrop.querySelectorAll('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+                .filter((el) => !el.disabled);
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
 
         backdrop.querySelector('[data-role="cancel"]').addEventListener('click', cancel);
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) cancel(); });
@@ -625,7 +686,8 @@
         }
         document.addEventListener('keydown', onKey);
         document.body.appendChild(backdrop);
-        if (typeof content === 'string') confirmBtn.focus();
+        const firstField = bodyEl.querySelector('input:not([readonly]), select, textarea:not([readonly])');
+        (firstField || confirmBtn).focus();
     }
 
     function confirmDialog({ title, message, confirmText, danger }) {
@@ -725,6 +787,10 @@
         user_unlocked: 'User unlocked',
         admin_granted: 'Admin granted',
         admin_revoked: 'Admin removed',
+        reset_policy_changed: 'Reset policy changed',
+        session_revoked: 'Session ended (AD account)',
+        account_unlock: 'Account unlocked',
+        sms_limit: 'SMS limit reached',
     };
 
     const METHOD_LABELS = {
@@ -734,6 +800,8 @@
         'security_questions+totp': 'Questions + authenticator',
         'security_questions+sms': 'Questions + SMS',
         authenticated: 'Signed in',
+        settings: 'Admin settings',
+        session: 'Session',
         enrollment_reminder: 'Enrollment reminder',
     };
 
@@ -783,6 +851,9 @@
 
     function renderSettings(data) {
         renderFactorSettings(data);
+        renderRules(data);
+        document.getElementById('auditRetention').value = data.audit?.retentionDays ?? 0;
+        document.getElementById('remExpired').value = String(Boolean(data.reminders.expiredNotice));
         document.getElementById('smtpHost').value = data.mail.host || '';
         document.getElementById('smtpPort').value = data.mail.port ?? '';
         document.getElementById('smtpFrom').value = data.mail.from || '';
@@ -816,7 +887,99 @@
         document.getElementById('remEffective').textContent = effective + stored;
     }
 
-    // ---- Verification tab: second factors and the SMS gateway ----
+    // ---- Verification tab: reset policy, rules, second factors and the SMS gateway ----
+
+    const POLICY_TEXT = {
+        both: 'Users answer their security questions, then enter a one-time code.',
+        either: 'Users prove their identity with their security questions or with a one-time code.',
+        totp_only: 'Users prove their identity with a one-time code only (authenticator app or SMS).',
+    };
+
+    function renderRules(data) {
+        const security = data.security || {};
+        document.getElementById('hideAccountState').value = String(Boolean(security.hideAccountState));
+        document.getElementById('pwMinLength').value = security.passwordMinLength ?? 8;
+        document.getElementById('pwComplexity').value = String(security.passwordComplexity !== false);
+        document.getElementById('lockAttempts').value = security.lockoutAttempts ?? 5;
+        document.getElementById('lockMinutes').value = security.lockoutMinutes ?? 30;
+    }
+
+    // Shared by the forms that may need the admin's Windows password (protected settings)
+    async function saveSettings(btn, settings, passwordInput) {
+        const body = { settings };
+        if (passwordInput) {
+            setFieldError(passwordInput, '');
+            if (passwordInput.value) body.currentPassword = passwordInput.value;
+        }
+        setButtonLoading(btn, true, 'Saving...');
+        try {
+            const { data, message } = await api('PUT', '/api/admin/settings', body);
+            settingsCache = data;
+            renderSettings(data);
+            if (passwordInput) passwordInput.value = '';
+            showToast(message || 'Settings saved.', 'success');
+            return true;
+        } catch (err) {
+            if (passwordInput && ['REAUTH_REQUIRED', 'REAUTH_FAILED'].includes(err.code)) {
+                setFieldError(passwordInput, err.message);
+                passwordInput.focus();
+            } else {
+                showToast(err.message, 'error');
+            }
+            return false;
+        } finally {
+            setButtonLoading(btn, false);
+        }
+    }
+
+    document.getElementById('policyForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const btn = document.getElementById('policySaveBtn');
+        const passwordInput = document.getElementById('policyCurrentPassword');
+        const value = document.getElementById('resetPolicy').value;
+        if (value === (settingsCache?.reset?.policy || '')) {
+            showToast('The policy is unchanged.', 'info');
+            return;
+        }
+        if (!passwordInput.value) {
+            setFieldError(passwordInput, 'Enter your Windows password to change the policy.');
+            passwordInput.focus();
+            return;
+        }
+        const save = () => saveSettings(btn, { 'reset.policy': value }, passwordInput);
+        if (value === 'both') {
+            save();
+            return;
+        }
+        openModal({
+            title: 'Allow a single proof of identity?',
+            content: 'Users will be able to reset their Windows password with only one proof of identity. Continue?',
+            confirmText: 'Change Policy',
+            danger: true,
+            onConfirm: async () => {
+                await save();
+                return true;
+            },
+        });
+    });
+
+    document.getElementById('rulesForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveSettings(document.getElementById('rulesSaveBtn'), {
+            'security.hideAccountState': document.getElementById('hideAccountState').value,
+            'security.passwordMinLength': document.getElementById('pwMinLength').value.trim(),
+            'security.passwordComplexity': document.getElementById('pwComplexity').value,
+            'security.lockoutAttempts': document.getElementById('lockAttempts').value.trim(),
+            'security.lockoutMinutes': document.getElementById('lockMinutes').value.trim(),
+        });
+    });
+
+    document.getElementById('retentionForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        saveSettings(document.getElementById('retentionSaveBtn'), {
+            'audit.retentionDays': document.getElementById('auditRetention').value.trim(),
+        });
+    });
 
     function renderFactorSettings(data) {
         const factors = data.factors || {};
@@ -824,6 +987,19 @@
         document.getElementById('facTotp').value = String(Boolean(factors.totp));
         document.getElementById('facSms').value = String(Boolean(factors.sms));
         document.getElementById('smsUrl').value = sms.url || '';
+        // The stored URL holds the gateway credentials and is never sent back; only where it points
+        document.getElementById('smsUrlHint').textContent = sms.url
+            ? `Stored: ${sms.urlHint?.method || ''} ${sms.urlHint?.host || ''} (credentials hidden). To change it, enter the whole URL.`
+            : 'Empty = SMS codes cannot be switched on.';
+        document.getElementById('smsLimitUser').value = sms.dailyLimitPerUser ?? '';
+        document.getElementById('smsLimitTotal').value = sms.dailyLimitTotal ?? '';
+
+        const policy = data.reset?.policy || 'both';
+        document.getElementById('resetPolicy').value = policy;
+        const source = data.overrides.includes('reset.policy')
+            ? 'Stored in the portal.'
+            : `From the server .env file (RESET_POLICY=${data.envDefaults.resetPolicy}).`;
+        document.getElementById('policyHint').textContent = `${POLICY_TEXT[policy] || ''} ${source}`;
         document.getElementById('smsMethod').value = sms.method || 'GET';
         document.getElementById('smsBodyType').value = sms.bodyType || 'json';
         document.getElementById('smsBodyTemplate').value = sms.bodyTemplate || '';
@@ -855,22 +1031,13 @@
             'sms.countryCode': document.getElementById('smsCountryCode').value.trim(),
             'sms.successText': document.getElementById('smsSuccessText').value.trim(),
             'sms.messageTemplate': document.getElementById('smsMessageTemplate').value.trim(),
+            'sms.dailyLimitPerUser': document.getElementById('smsLimitUser').value.trim(),
+            'sms.dailyLimitTotal': document.getElementById('smsLimitTotal').value.trim(),
         };
         // Like the SMTP password: the masked placeholder means "keep what is stored"
         if (headers !== (settingsCache?.sms?.headers || '')) settings['sms.headers'] = headers;
 
-        const btn = document.getElementById('factorSaveBtn');
-        setButtonLoading(btn, true, 'Saving...');
-        try {
-            const { data, message } = await api('PUT', '/api/admin/settings', { settings });
-            settingsCache = data;
-            renderSettings(data);
-            showToast(message || 'Settings saved.', 'success');
-        } catch (err) {
-            showToast(err.message, 'error');
-        } finally {
-            setButtonLoading(btn, false);
-        }
+        await saveSettings(document.getElementById('factorSaveBtn'), settings, document.getElementById('factorCurrentPassword'));
     });
 
     document.getElementById('testSmsBtn').addEventListener('click', async (e) => {
@@ -914,6 +1081,7 @@
             'reminders.days': document.getElementById('remDays').value.trim(),
             'reminders.hour': remHour.value,
             'reminders.source': document.getElementById('remSource').value,
+            'reminders.expiredNotice': document.getElementById('remExpired').value,
         };
         // Sent only when the admin typed something: the untouched placeholder keeps the stored secret
         if (password !== (settingsCache?.mail.password || '')) settings['mail.password'] = password;

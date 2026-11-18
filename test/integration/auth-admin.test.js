@@ -233,6 +233,9 @@ describe('admin', () => {
         assert.equal((await api('GET', '/api/admin/stats', undefined, userToken)).status, 200);
 
         assert.equal((await api('PUT', `/api/admin/users/${user.id}/lock`, { locked: true }, token)).status, 200);
-        assert.equal((await api('GET', '/api/admin/stats', undefined, userToken)).status, 403);
+        // Locking ends the session itself, not only the admin rights
+        const afterLock = await api('GET', '/api/admin/stats', undefined, userToken);
+        assert.equal(afterLock.status, 401);
+        assert.equal(afterLock.body.code, 'SESSION_REVOKED');
     });
 });

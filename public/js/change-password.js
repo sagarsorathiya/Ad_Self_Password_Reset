@@ -12,7 +12,9 @@
     const submitBtn = document.getElementById('submitBtn');
 
     initPasswordToggles();
-    bindPasswordStrength(next, document.getElementById('strength'), document.getElementById('reqList'));
+    // AD refuses a password containing the account name or a part of the display name
+    const identity = () => ({ username: user.username, displayName: user.displayName });
+    bindPasswordStrength(next, document.getElementById('strength'), document.getElementById('reqList'), identity);
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -23,7 +25,7 @@
             setFieldError(current, 'Current password is required.');
             valid = false;
         }
-        if (!meetsComplexity(next.value)) {
+        if (!meetsComplexity(next.value, identity())) {
             setFieldError(next, 'Password does not meet the complexity requirements.');
             valid = false;
         } else if (next.value === current.value) {

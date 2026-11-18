@@ -10,6 +10,8 @@ const mobileService = require('../services/mobileService');
 const mailService = require('../services/mailService');
 const notificationService = require('../services/notificationService');
 const passwordReminderService = require('../services/passwordReminderService');
+const reauthService = require('../services/reauthService');
+const { isAdGroupAdmin } = require('../middleware/admin');
 
 const UAC_ACCOUNT_DISABLED = 2;
 
@@ -25,6 +27,12 @@ async function getUsers(req, res) {
         const offset = (page - 1) * limit;
         const search = req.query.search || '';
         const filter = req.query.filter || 'all';
+        // Whitelisted, never taken from the request as SQL
+        let orderBy;
+        switch (req.query.sort) {
+            case 'activity': orderBy = 'last_activity DESC NULLS LAST, created_at DESC'; break;
+            default: orderBy = 'created_at DESC';
+        }
 
         let whereClause = '';
         const params = [];
@@ -58,9 +66,10 @@ async function getUsers(req, res) {
         params.push(limit, offset);
         const result = await db.query(
             `SELECT id, username, display_name, email, is_enrolled, totp_enabled, sms_enabled,
-                    security_questions_set, locked, is_portal_admin, failed_attempts, created_at, updated_at
+                    security_questions_set, locked, is_portal_admin, failed_attempts, created_at, updated_at,
+                    (SELECT MAX(a.created_at) FROM audit_log a WHERE a.user_id = users.id) AS last_activity
              FROM users${whereClause}
-             ORDER BY created_at DESC
+             ORDER BY ${orderBy}
              LIMIT $${params.length - 1} OFFSET $${params.length}`,
             params
         );
@@ -78,7 +87,7 @@ async function getUsers(req, res) {
             },
         });
     } catch (err) {
-        console.error('[Admin] Get users error:', err);
+        console.error('[Admin] Get users error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to load users.',
@@ -123,7 +132,7 @@ async function getStats(req, res) {
             },
         });
     } catch (err) {
-        console.error('[Admin] Get stats error:', err);
+        console.error('[Admin] Get stats error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to load statistics.',
@@ -193,7 +202,7 @@ async function getAuditLog(req, res) {
             },
         });
     } catch (err) {
-        console.error('[Admin] Get audit log error:', err);
+        console.error('[Admin] Get audit log error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to load audit log.',
@@ -217,6 +226,9 @@ async function toggleLock(req, res) {
                 message: 'The "locked" field must be true or false.',
             });
         }
+        if (locked && userId === req.user.userId) {
+            return res.status(400).json({ success: false, message: 'You cannot lock your own account.' });
+        }
 
         const result = await db.query(
             'UPDATE users SET locked = $1, token_version = token_version + CASE WHEN $1 THEN 1 ELSE 0 END, updated_at = NOW() WHERE id = $2 RETURNING username',
@@ -239,7 +251,7 @@ async function toggleLock(req, res) {
             message: `User ${locked ? 'locked' : 'unlocked'} successfully.`,
         });
     } catch (err) {
-        console.error('[Admin] Toggle lock error:', err);
+        console.error('[Admin] Toggle lock error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to update user lock status.',
@@ -286,6 +298,10 @@ async function setPortalAdmin(req, res) {
         const action = isAdmin ? 'admin_granted' : 'admin_revoked';
         await logAudit(req.user.userId, req.user.username, action, null, req, true,
             `${action} for: ${result.rows[0].username}`);
+        notificationService.sendSecurityChangeAlert({
+            userId, username: result.rows[0].username, req,
+            change: isAdmin ? 'You were given portal administrator rights' : 'Your portal administrator rights were removed',
+        });
 
         res.json({
             success: true,
@@ -353,6 +369,9 @@ async function addPortalAdmin(req, res) {
 
         await logAudit(req.user.userId, req.user.username, 'admin_granted', null, req, true,
             `admin_granted for: ${dbUser.username}`);
+        notificationService.sendSecurityChangeAlert({
+            userId: dbUser.id, username: dbUser.username, req, change: 'You were given portal administrator rights',
+        });
 
         res.status(201).json({
             success: true,
@@ -374,7 +393,9 @@ async function addPortalAdmin(req, res) {
 async function getQuestions(req, res) {
     try {
         const result = await db.query(
-            'SELECT id, question_text, is_active, sort_order, created_at FROM security_questions ORDER BY sort_order ASC'
+            `SELECT q.id, q.question_text, q.is_active, q.sort_order, q.created_at,
+                    (SELECT COUNT(*) FROM user_security_answers a WHERE a.question_id = q.id)::int AS answer_count
+             FROM security_questions q ORDER BY q.sort_order ASC`
         );
 
         res.json({
@@ -382,7 +403,7 @@ async function getQuestions(req, res) {
             data: result.rows,
         });
     } catch (err) {
-        console.error('[Admin] Get questions error:', err);
+        console.error('[Admin] Get questions error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to load questions.',
@@ -399,7 +420,7 @@ async function addQuestion(req, res) {
     try {
         const { questionText, sortOrder } = req.body;
 
-        if (!questionText || questionText.trim().length < 10) {
+        if (typeof questionText !== 'string' || questionText.trim().length < 10) {
             return res.status(400).json({
                 success: false,
                 message: 'Question text must be at least 10 characters long.',
@@ -419,7 +440,7 @@ async function addQuestion(req, res) {
             message: 'Question added successfully.',
         });
     } catch (err) {
-        console.error('[Admin] Add question error:', err);
+        console.error('[Admin] Add question error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to add question.',
@@ -441,10 +462,25 @@ async function updateQuestion(req, res) {
         const params = [];
 
         if (questionText !== undefined) {
-            if (questionText.trim().length < 10) {
+            if (typeof questionText !== 'string' || questionText.trim().length < 10) {
                 return res.status(400).json({
                     success: false,
                     message: 'Question text must be at least 10 characters long.',
+                });
+            }
+            // Rewording a question users answered would change what their stored answers mean
+            const current = await db.query(
+                `SELECT q.question_text,
+                        (SELECT COUNT(*) FROM user_security_answers a WHERE a.question_id = q.id)::int AS answer_count
+                 FROM security_questions q WHERE q.id = $1`,
+                [questionId]
+            );
+            const row = current.rows[0];
+            if (row && row.question_text !== questionText.trim() && row.answer_count > 0) {
+                return res.status(409).json({
+                    success: false,
+                    message: `${row.answer_count} user(s) answered this question. Deactivate it and add a new one `
+                        + 'instead, so their answers keep their meaning.',
                 });
             }
             params.push(questionText.trim());
@@ -452,11 +488,17 @@ async function updateQuestion(req, res) {
         }
 
         if (isActive !== undefined) {
+            if (typeof isActive !== 'boolean') {
+                return res.status(400).json({ success: false, message: 'The "isActive" field must be true or false.' });
+            }
             params.push(isActive);
             updates.push(`is_active = $${params.length}`);
         }
 
         if (sortOrder !== undefined) {
+            if (!Number.isInteger(sortOrder)) {
+                return res.status(400).json({ success: false, message: 'The sort order must be a whole number.' });
+            }
             params.push(sortOrder);
             updates.push(`sort_order = $${params.length}`);
         }
@@ -490,7 +532,7 @@ async function updateQuestion(req, res) {
             message: 'Question updated successfully.',
         });
     } catch (err) {
-        console.error('[Admin] Update question error:', err);
+        console.error('[Admin] Update question error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to update question.',
@@ -527,6 +569,7 @@ async function resetEnrollment(req, res) {
                 mobile_pending = NULL,
                 mobile_pending_source = NULL,
                 mobile_verified_at = NULL,
+                mobile_verified_hash = NULL,
                 security_questions_set = FALSE,
                 failed_attempts = 0,
                 last_failed_attempt = NULL,
@@ -547,14 +590,17 @@ async function resetEnrollment(req, res) {
 
         await logAudit(req.user.userId, req.user.username, 'enrollment_reset', null, req, true,
             `Reset enrollment for: ${result.rows[0].username}`);
+        notificationService.sendSecurityChangeAlert({
+            userId, username: result.rows[0].username, req, change: 'An administrator reset your password reset settings',
+        });
 
         res.json({
             success: true,
             message: 'User enrollment has been reset. They will need to enroll again on next login.',
         });
     } catch (err) {
-        await client.query('ROLLBACK');
-        console.error('[Admin] Reset enrollment error:', err);
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('[Admin] Reset enrollment error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to reset enrollment.',
@@ -725,9 +771,52 @@ async function updateSettings(req, res) {
             return res.status(400).json({ success: false, message: 'No settings were supplied.' });
         }
 
+        // Changes that could redirect or weaken identity verification: AD admin group + Windows password
+        const sensitive = settingsService.protectedChanges(values);
+        if (sensitive.length) {
+            const labels = sensitive.map((key) => settingsService.FIELDS[key].label).join(', ');
+            if (!isAdGroupAdmin(req.user)) {
+                return res.status(403).json({
+                    success: false,
+                    code: 'AD_ADMIN_REQUIRED',
+                    message: `Only members of the directory admin group can change: ${labels}.`,
+                });
+            }
+            const check = await reauthService.verifyPassword(req.user.username, req.body.currentPassword);
+            if (check !== 'ok') {
+                if (check !== 'missing') await logAudit(req.user.userId, req.user.username, 'reauth', 'settings', req, false, check);
+                const status = check === 'unavailable' ? 503 : 401;
+                const message = {
+                    missing: `Enter your Windows password to change: ${labels}.`,
+                    wrong: 'Current password is incorrect.',
+                    unavailable: 'The directory service is currently unavailable.',
+                }[check];
+                return res.status(status).json({
+                    success: false, code: check === 'missing' ? 'REAUTH_REQUIRED' : 'REAUTH_FAILED', message,
+                });
+            }
+        }
+
+        const policyBefore = settingsService.resetPolicy();
         const changed = await settingsService.save(values, req.user.username);
         if (changed.length) {
             await logAudit(req.user.userId, req.user.username, 'settings_updated', null, req, true, changed.join(', '));
+        }
+        const policyAfter = settingsService.resetPolicy();
+        if (policyAfter !== policyBefore) {
+            await logAudit(req.user.userId, req.user.username, 'reset_policy_changed', null, req, true,
+                `Reset policy: ${policyBefore} -> ${policyAfter}`);
+        }
+        if (sensitive.length) {
+            // Not awaited: every other portal admin hears about it
+            db.query("SELECT email FROM users WHERE is_portal_admin = TRUE AND COALESCE(email, '') <> ''")
+                .then(({ rows }) => notificationService.sendSettingChangedNotice({
+                    actor: req.user.username,
+                    labels: sensitive.map((key) => settingsService.FIELDS[key].label),
+                    req,
+                    recipients: rows.map((r) => r.email),
+                }))
+                .catch((err) => console.error('[Admin] Setting change notice failed:', err.message));
         }
 
         res.json({

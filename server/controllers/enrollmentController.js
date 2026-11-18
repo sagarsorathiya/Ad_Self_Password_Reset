@@ -5,14 +5,22 @@ const totpService = require('../services/totpService');
 const smsOtpService = require('../services/smsOtpService');
 const mobileService = require('../services/mobileService');
 const ldapService = require('../services/ldapService');
+const cryptoService = require('../services/cryptoService');
+const reauthService = require('../services/reauthService');
+const notificationService = require('../services/notificationService');
+const { isProtectedAccount } = require('../services/adPassword');
 const { logAudit } = require('./authController');
+const { smsLimitResponse } = require('./passwordController');
 
 const BCRYPT_ROUNDS = 12;
+// First enrolment needs a password proved within this many seconds (a fresh sign-in or /api/auth/reauth)
+const RECENT_AUTH_SECONDS = 15 * 60;
 
 // Replacing an existing factor must prove password knowledge, so a stolen session can't swap in attacker-controlled factors.
 async function confirmCurrentPassword(req, res, method) {
-    const { currentPassword } = req.body || {};
-    if (typeof currentPassword !== 'string' || currentPassword.length === 0) {
+    const check = await reauthService.verifyPassword(req.user.username, req.body?.currentPassword);
+    if (check === 'ok') return true;
+    if (check === 'missing') {
         res.status(401).json({
             success: false,
             code: 'REAUTH_REQUIRED',
@@ -20,19 +28,35 @@ async function confirmCurrentPassword(req, res, method) {
         });
         return false;
     }
-    try {
-        await ldapService.authenticateUser(req.user.username, currentPassword);
-        return true;
-    } catch (err) {
-        await logAudit(req.user.userId, req.user.username, 'reauth', method, req, false, err.message);
-        const unavailable = /unreachable|connection error/i.test(err.message);
-        res.status(unavailable ? 503 : 401).json({
-            success: false,
-            code: 'REAUTH_FAILED',
-            message: unavailable ? 'The directory service is currently unavailable.' : 'Current password is incorrect.',
-        });
-        return false;
-    }
+    await logAudit(req.user.userId, req.user.username, 'reauth', method, req, false, check);
+    res.status(check === 'unavailable' ? 503 : 401).json({
+        success: false,
+        code: 'REAUTH_FAILED',
+        message: check === 'unavailable' ? 'The directory service is currently unavailable.' : 'Current password is incorrect.',
+    });
+    return false;
+}
+
+/**
+ * An account that is not enrolled yet may set up its first factors without typing the password again, but only
+ * shortly after it was proved: a refresh token left on a shared PC must not be enough to register an attacker's
+ * questions or authenticator (and from then on reset this user's password).
+ * @returns {boolean} false when the response has already been sent
+ */
+function freshEnough(req, res, dbUser) {
+    if (dbUser.is_enrolled) return true; // factor changes on enrolled accounts ask for the password anyway
+    if (Date.now() / 1000 - (req.user.authTime || 0) <= RECENT_AUTH_SECONDS) return true;
+    res.status(401).json({
+        success: false,
+        code: 'RECENT_AUTH_REQUIRED',
+        message: 'Please confirm your Windows password to continue setting up.',
+    });
+    return false;
+}
+
+// Security alert mail, never awaited: the change has been made already
+function alertUser(req, change) {
+    notificationService.sendSecurityChangeAlert({ userId: req.user.userId, username: req.user.username, change, req });
 }
 
 /**
@@ -72,7 +96,7 @@ async function getQuestions(req, res) {
             data: result.rows,
         });
     } catch (err) {
-        console.error('[Enrollment] Get questions error:', err);
+        console.error('[Enrollment] Get questions error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to load security questions.',
@@ -96,7 +120,7 @@ async function getMyQuestions(req, res) {
         );
         res.json({ success: true, data: result.rows });
     } catch (err) {
-        console.error('[Enrollment] Get my questions error:', err);
+        console.error('[Enrollment] Get my questions error:', err.message);
         res.status(500).json({ success: false, message: 'Failed to load your security questions.' });
     }
 }
@@ -145,7 +169,12 @@ async function submitSecurityQuestions(req, res) {
         );
         const existingHashes = new Map(existing.rows.map((r) => [r.question_id, r.answer_hash]));
 
-        if (existingHashes.size > 0 && !(await confirmCurrentPassword(req, res, 'security_questions'))) return;
+        if (existingHashes.size > 0) {
+            if (!(await confirmCurrentPassword(req, res, 'security_questions'))) return;
+        } else {
+            const enrolledRow = await db.query('SELECT is_enrolled FROM users WHERE id = $1', [req.user.userId]);
+            if (!freshEnough(req, res, enrolledRow.rows[0] || {})) return;
+        }
 
         for (const answer of answers) {
             const text = (answer.answer || '').trim();
@@ -201,14 +230,15 @@ async function submitSecurityQuestions(req, res) {
         await client.query('COMMIT');
 
         await logAudit(req.user.userId, req.user.username, 'enrollment', 'security_questions', req, true);
+        if (existingHashes.size > 0) alertUser(req, 'Your security questions were changed');
 
         res.json({
             success: true,
             message: 'Security questions saved successfully.',
         });
     } catch (err) {
-        await client.query('ROLLBACK');
-        console.error('[Enrollment] Submit security questions error:', err);
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('[Enrollment] Submit security questions error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to save security questions.',
@@ -233,6 +263,7 @@ async function setupTOTP(req, res) {
         }
 
         const current = await db.query('SELECT is_enrolled, totp_enabled FROM users WHERE id = $1', [req.user.userId]);
+        if (!freshEnough(req, res, current.rows[0] || {})) return;
         if (!(await confirmFactorChange(req, res, current.rows[0] || {}, 'totp'))) return;
 
         const secret = totpService.generateSecret();
@@ -255,7 +286,7 @@ async function setupTOTP(req, res) {
             },
         });
     } catch (err) {
-        console.error('[Enrollment] TOTP setup error:', err);
+        console.error('[Enrollment] TOTP setup error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to set up TOTP.',
@@ -272,7 +303,7 @@ async function verifyTOTPSetup(req, res) {
     try {
         const { code } = req.body;
 
-        if (!code || code.length !== 6) {
+        if (typeof code !== 'string' || code.length !== 6) {
             return res.status(400).json({
                 success: false,
                 message: 'Please enter a valid 6-digit code.',
@@ -281,7 +312,7 @@ async function verifyTOTPSetup(req, res) {
 
         // Get the stored (encrypted) secret
         const result = await db.query(
-            'SELECT totp_pending_secret, totp_enabled FROM users WHERE id = $1',
+            'SELECT totp_pending_secret, totp_enabled, is_enrolled FROM users WHERE id = $1',
             [req.user.userId]
         );
 
@@ -298,6 +329,7 @@ async function verifyTOTPSetup(req, res) {
         const isValid = step !== null;
 
         if (!isValid) {
+            await logAudit(req.user.userId, req.user.username, 'enrollment', 'totp', req, false, 'Invalid code');
             return res.status(400).json({
                 success: false,
                 message: 'Invalid code. Please try again with a fresh code from your authenticator app.',
@@ -305,6 +337,7 @@ async function verifyTOTPSetup(req, res) {
         }
 
         // Enable TOTP
+        let enrolledNow = false;
         const client = await db.getClient();
         try {
             await client.query('BEGIN');
@@ -322,7 +355,7 @@ async function verifyTOTPSetup(req, res) {
                     message: 'Authenticator setup changed in another session. Please start again.',
                 });
             }
-            await updateEnrollmentStatus(client, req.user.userId);
+            enrolledNow = await updateEnrollmentStatus(client, req.user.userId);
             await client.query('COMMIT');
         } catch (err) {
             await client.query('ROLLBACK');
@@ -332,6 +365,11 @@ async function verifyTOTPSetup(req, res) {
         }
 
         await logAudit(req.user.userId, req.user.username, wasEnabled ? 'totp_replaced' : 'enrollment', 'totp', req, true);
+        if (!result.rows[0].is_enrolled && enrolledNow) {
+            alertUser(req, 'Your account was enrolled for self-service password reset');
+        } else {
+            alertUser(req, wasEnabled ? 'Your authenticator app was replaced' : 'An authenticator app was added');
+        }
 
         res.json({
             success: true,
@@ -340,7 +378,7 @@ async function verifyTOTPSetup(req, res) {
                 : 'Authenticator app verified and enabled successfully.',
         });
     } catch (err) {
-        console.error('[Enrollment] TOTP verify error:', err);
+        console.error('[Enrollment] TOTP verify error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to verify TOTP code.',
@@ -366,12 +404,13 @@ async function setupSMS(req, res) {
         }
 
         const result = await db.query(
-            'SELECT is_enrolled, sms_enabled, mobile_number, mobile_source FROM users WHERE id = $1',
+            'SELECT is_enrolled, sms_enabled, mobile_number, mobile_source, mobile_verified_hash FROM users WHERE id = $1',
             [req.user.userId]
         );
         const dbUser = result.rows[0] || {};
 
         const supplied = typeof req.body?.mobile === 'string' ? req.body.mobile.trim() : '';
+        if (!freshEnough(req, res, dbUser)) return;
         if (!(await confirmFactorChange(req, res, dbUser, 'sms'))) return;
 
         let target;
@@ -387,8 +426,10 @@ async function setupSMS(req, res) {
             target = { number, source: 'portal' };
         } else {
             const adUser = await ldapService.findUser(req.user.username);
-            target = mobileService.resolve(dbUser, adUser);
-            if (!target) {
+            const resolved = mobileService.resolve(dbUser, adUser);
+            // The directory number changed since it was verified: setting up again is how the user confirms it
+            target = resolved?.changed ? { number: mobileService.normalize(adUser.mobile), source: 'ad' } : resolved;
+            if (!target?.number) {
                 return res.status(400).json({
                     success: false,
                     code: 'MOBILE_REQUIRED',
@@ -400,10 +441,11 @@ async function setupSMS(req, res) {
         const masked = mobileService.mask(target.number);
 
         // Staged like a pending authenticator secret: the number only becomes the user's once a code sent to
-        // it has been entered, so a typo cannot point future codes at someone else's phone.
+        // it has been entered, so a typo cannot point future codes at someone else's phone. Kept (encrypted) for
+        // directory numbers too, so verification can pin exactly the number that received the code.
         await db.query(
             'UPDATE users SET mobile_pending = $1, mobile_pending_source = $2, updated_at = NOW() WHERE id = $3',
-            [target.source === 'portal' ? mobileService.encrypt(target.number) : null, target.source, req.user.userId]
+            [mobileService.encrypt(target.number), target.source, req.user.userId]
         );
 
         const { resendAfter, gateway } = await smsOtpService.issue({
@@ -437,6 +479,9 @@ async function setupSMS(req, res) {
                 data: { resendAfter: err.retryAfter },
             });
         }
+        if (err instanceof smsOtpService.SmsLimitError) {
+            return smsLimitResponse(err, { id: req.user.userId, username: req.user.username }, req, res);
+        }
         console.error('[Enrollment] SMS setup error:', err.message);
         await logAudit(req.user.userId, req.user.username, 'enrollment_sms', 'sms', req, false, `Code not sent: ${err.message}`);
         res.status(502).json({
@@ -454,7 +499,7 @@ async function setupSMS(req, res) {
 async function verifySMS(req, res) {
     try {
         const result = await db.query(
-            'SELECT sms_enabled, mobile_pending, mobile_pending_source FROM users WHERE id = $1',
+            'SELECT sms_enabled, is_enrolled, mobile_pending, mobile_pending_source FROM users WHERE id = $1',
             [req.user.userId]
         );
         const dbUser = result.rows[0];
@@ -473,17 +518,24 @@ async function verifySMS(req, res) {
         }
 
         const wasEnabled = dbUser.sms_enabled;
+        // The number the code went to; rows staged before pinning existed hold no pending directory number
+        const pendingNumber = dbUser.mobile_pending ? cryptoService.decrypt(dbUser.mobile_pending) : null;
+        const verifiedHash = pendingNumber ? cryptoService.hmac(pendingNumber) : check.numberHash;
+        let enrolledNow = false;
         const client = await db.getClient();
         try {
             await client.query('BEGIN');
+            // Only portal-supplied numbers are stored; a directory number is re-read from AD and checked
+            // against mobile_verified_hash on every send
             await client.query(
-                `UPDATE users SET mobile_number = mobile_pending, mobile_source = mobile_pending_source,
+                `UPDATE users SET mobile_number = CASE WHEN mobile_pending_source = 'portal' THEN mobile_pending ELSE NULL END,
+                        mobile_source = mobile_pending_source, mobile_verified_hash = $2,
                         mobile_pending = NULL, mobile_pending_source = NULL, mobile_verified_at = NOW(),
                         sms_enabled = TRUE, updated_at = NOW()
                  WHERE id = $1`,
-                [req.user.userId]
+                [req.user.userId, verifiedHash]
             );
-            await updateEnrollmentStatus(client, req.user.userId);
+            enrolledNow = await updateEnrollmentStatus(client, req.user.userId);
             await client.query('COMMIT');
         } catch (err) {
             await client.query('ROLLBACK');
@@ -493,6 +545,12 @@ async function verifySMS(req, res) {
         }
 
         await logAudit(req.user.userId, req.user.username, wasEnabled ? 'sms_replaced' : 'enrollment', 'sms', req, true);
+        const masked = pendingNumber ? mobileService.mask(pendingNumber) : 'your mobile';
+        if (!dbUser.is_enrolled && enrolledNow) {
+            alertUser(req, 'Your account was enrolled for self-service password reset');
+        } else {
+            alertUser(req, wasEnabled ? `Text-message codes now go to ${masked}` : `Text-message codes were set up for ${masked}`);
+        }
 
         res.json({
             success: true,
@@ -514,7 +572,7 @@ async function getStatus(req, res) {
     try {
         const result = await db.query(
             `SELECT is_enrolled, totp_enabled, sms_enabled, security_questions_set,
-                    mobile_number, mobile_source FROM users WHERE id = $1`,
+                    mobile_number, mobile_source, mobile_verified_hash FROM users WHERE id = $1`,
             [req.user.userId]
         );
 
@@ -527,8 +585,8 @@ async function getStatus(req, res) {
 
         const user = result.rows[0];
         const factors = settingsService.current().factors;
-        // Only looked up when SMS is on: every status call would otherwise hit the directory
-        const adUser = factors.sms ? await ldapService.findUser(req.user.username).catch(() => null) : null;
+        // One lookup: the mobile number (when SMS is on) and whether reset is possible for this account at all
+        const adUser = await ldapService.findUser(req.user.username).catch(() => null);
         const mobile = factors.sms ? mobileService.resolve(user, adUser) : null;
 
         res.json({
@@ -543,11 +601,15 @@ async function getStatus(req, res) {
                 // Which second factors the administrator allows right now
                 factors: { totp: factors.totp, sms: factors.sms },
                 mobile: {
-                    masked: mobile ? mobileService.mask(mobile.number) : '',
+                    masked: mobile?.number ? mobileService.mask(mobile.number) : '',
                     source: mobile ? mobile.source : null,
                     // false = the portal has to ask the user for a number
                     inDirectory: Boolean(mobileService.normalize(adUser?.mobile)),
+                    // The directory number is not the one verified: no codes until the user confirms it
+                    changedInDirectory: Boolean(mobile?.changed),
                 },
+                // Protected (administrator) accounts can change but not reset their password here
+                selfServiceReset: !isProtectedAccount(adUser),
                 steps: {
                     securityQuestions: user.security_questions_set ? 'complete' : 'pending',
                     totp: user.totp_enabled ? 'complete' : 'pending',
@@ -556,7 +618,7 @@ async function getStatus(req, res) {
             },
         });
     } catch (err) {
-        console.error('[Enrollment] Status error:', err);
+        console.error('[Enrollment] Status error:', err.message);
         res.status(500).json({
             success: false,
             message: 'Failed to check enrollment status.',
@@ -566,6 +628,7 @@ async function getStatus(req, res) {
 
 /**
  * Update the is_enrolled flag: security questions plus at least one enabled second factor.
+ * @returns {Promise<boolean>} the new is_enrolled value
  */
 async function updateEnrollmentStatus(client, userId) {
     const result = await client.query(
@@ -585,7 +648,9 @@ async function updateEnrollmentStatus(client, userId) {
             'UPDATE users SET is_enrolled = $1, updated_at = NOW() WHERE id = $2',
             [isEnrolled, userId]
         );
+        return Boolean(isEnrolled);
     }
+    return false;
 }
 
 module.exports = {

@@ -5,17 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security Settings — AD Password Portal</title>
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css">
+    <link rel="stylesheet" href="/css/styles.css?v=20261118">
 </head>
 <body>
     <div class="app-container">
         <nav id="navbar"></nav>
 
         <main class="page-wrapper hidden" id="content">
-            <div class="card card-wide fade-in" style="margin: 0 auto;">
+            <div class="card card-wide fade-in mx-auto">
                 <div class="section-header text-center">
                     <h1 class="section-title" id="pageTitle">Set Up Account Recovery</h1>
                     <p class="section-subtitle" id="pageSubtitle">Complete both steps so you can reset your password if you ever forget it.</p>
+                </div>
+
+                <div id="adminAccountNotice" class="alert alert-info hidden" role="status">
+                    You can change your password here, but resetting a forgotten password is not available for
+                    administrator accounts. Contact IT if you forget it.
                 </div>
 
                 <div class="stepper" id="stepper">
@@ -29,48 +34,48 @@
                 <!-- Security settings overview (enrolled users) -->
                 <section id="manageView" class="hidden">
                     <div class="status-list">
-                        <div class="status-item" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div class="status-item status-item-stack">
+                            <div class="row-between">
                                 <strong>Security questions</strong>
                                 <span class="badge badge-success">Configured</span>
                             </div>
-                            <ol class="text-sm text-muted" id="currentQuestions" style="padding-left: 1.25rem;"></ol>
+                            <ol class="text-sm text-muted list-indent" id="currentQuestions"></ol>
                             <button type="button" class="btn btn-secondary btn-sm" id="updateQuestionsBtn">Update questions or answers</button>
                         </div>
-                        <div class="status-item" id="totpManageCard" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div class="status-item status-item-stack" id="totpManageCard">
+                            <div class="row-between">
                                 <strong>Authenticator app</strong>
                                 <span class="badge badge-success" id="totpManageBadge">Active</span>
                             </div>
                             <p class="text-sm text-muted" id="totpManageText"></p>
-                            <div class="form-group reauth-group" id="totpReauthGroup" style="margin-bottom: 0;">
+                            <div class="form-group reauth-group mb-0" id="totpReauthGroup">
                                 <label class="form-label" for="totpCurrentPassword">Current Windows password</label>
                                 <div class="password-wrapper">
                                     <input class="form-input" type="password" id="totpCurrentPassword" autocomplete="current-password" maxlength="256">
-                                    <button type="button" class="password-toggle" aria-label="Show password">👁️</button>
+                                    <button type="button" class="password-toggle" aria-label="Show password">Show</button>
                                 </div>
                                 <div class="form-error"></div>
                             </div>
                             <button type="button" class="btn btn-secondary btn-sm" id="replaceTotpBtn">Replace authenticator (new device)</button>
                         </div>
-                        <div class="status-item hidden" id="smsManageCard" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div class="status-item status-item-stack hidden" id="smsManageCard">
+                            <div class="row-between">
                                 <strong>Text message (SMS)</strong>
                                 <span class="badge" id="smsManageBadge">Not set up</span>
                             </div>
                             <p class="text-sm text-muted" id="smsManageText"></p>
-                            <div class="form-group" id="smsManageMobileGroup" style="margin-bottom: 0;">
+                            <div class="form-group mb-0" id="smsManageMobileGroup">
                                 <label class="form-label" for="smsManageMobile">Mobile number</label>
                                 <input class="form-input" type="tel" id="smsManageMobile" maxlength="20"
                                        autocomplete="tel" placeholder="+919876543210">
                                 <p class="form-hint">Include the country code. Leave blank to keep using the number from the directory.</p>
                                 <div class="form-error"></div>
                             </div>
-                            <div class="form-group reauth-group" id="smsReauthGroup" style="margin-bottom: 0;">
+                            <div class="form-group reauth-group mb-0" id="smsReauthGroup">
                                 <label class="form-label" for="smsCurrentPassword">Current Windows password</label>
                                 <div class="password-wrapper">
                                     <input class="form-input" type="password" id="smsCurrentPassword" autocomplete="current-password" maxlength="256">
-                                    <button type="button" class="password-toggle" aria-label="Show password">👁️</button>
+                                    <button type="button" class="password-toggle" aria-label="Show password">Show</button>
                                 </div>
                                 <div class="form-error"></div>
                             </div>
@@ -82,7 +87,6 @@
                 <!-- Step 1: Security Questions -->
                 <section id="step1" class="hidden">
                     <div id="sqExistingAlert" class="alert alert-info hidden">
-                        <span class="alert-icon">ℹ️</span>
                         <span>Your current questions are pre-selected. Answers are stored encrypted and can't be displayed — leave an answer blank to keep it, or type a new one to change it.</span>
                     </div>
                     <form id="sqForm" novalidate>
@@ -91,7 +95,7 @@
                             <label class="form-label" for="sqCurrentPassword">Current Windows password</label>
                             <div class="password-wrapper">
                                 <input class="form-input" type="password" id="sqCurrentPassword" autocomplete="current-password" maxlength="256">
-                                <button type="button" class="password-toggle" aria-label="Show password">👁️</button>
+                                <button type="button" class="password-toggle" aria-label="Show password">Show</button>
                             </div>
                             <p class="form-hint">Required to change existing recovery settings.</p>
                             <div class="form-error"></div>
@@ -109,12 +113,10 @@
                         <p class="text-sm text-muted mb-4 text-center">Choose how you want to prove it is you when you reset your password.</p>
                         <div class="method-cards">
                             <button type="button" class="method-card" data-factor="totp">
-                                <div class="method-card-icon">📱</div>
                                 <div class="method-card-title">Authenticator App</div>
                                 <div class="method-card-description">A 6-digit code from Google or Microsoft Authenticator. Works without mobile signal.</div>
                             </button>
                             <button type="button" class="method-card" data-factor="sms">
-                                <div class="method-card-icon">✉️</div>
                                 <div class="method-card-title">Text Message</div>
                                 <div class="method-card-description">A 6-digit code sent to your mobile number. Nothing to install.</div>
                             </button>
@@ -124,12 +126,11 @@
                     <div id="smsSetup" class="hidden">
                         <button type="button" class="btn btn-ghost btn-sm mb-4 hidden" id="smsBackBtn">&larr; Choose another method</button>
                         <div id="smsReplaceAlert" class="alert alert-warning hidden">
-                            <span class="alert-icon">⚠️</span>
                             <span>Codes keep going to your current number until you verify the new one below.</span>
                         </div>
 
                         <form id="smsMobileForm" novalidate>
-                            <div class="form-group" id="smsDirectoryHint" style="display: none;">
+                            <div class="form-group hidden" id="smsDirectoryHint">
                                 <p class="text-sm text-muted">We will send a 6-digit code to <strong id="smsKnownNumber"></strong>, the mobile number on your account.</p>
                                 <button type="button" class="btn btn-ghost btn-sm" id="smsOtherNumberBtn">Use a different number</button>
                             </div>
@@ -158,10 +159,9 @@
 
                     <div id="totpSetup">
                         <div id="totpReplaceAlert" class="alert alert-warning hidden">
-                            <span class="alert-icon">⚠️</span>
                             <span>Your current authenticator stays active until you verify the new device below. After that, the old device stops working.</span>
                         </div>
-                        <ol class="text-sm text-muted mb-6" style="padding-left: 1.25rem;">
+                        <ol class="text-sm text-muted mb-6 list-indent">
                             <li>Open Google Authenticator, Microsoft Authenticator, or a compatible app. If none is installed, download one from the Google Play Store (Android) or the App Store (iPhone).</li>
                             <li>Scan the QR code below, or enter the key manually.</li>
                             <li>Enter the 6-digit code shown in the app to confirm.</li>
@@ -191,8 +191,8 @@
 
                 <!-- Step 3: Done -->
                 <section id="step3" class="hidden text-center">
-                    <div class="empty-state" style="padding-top: 1rem; padding-bottom: 1rem;">
-                        <div class="empty-state-icon" style="opacity: 1;">🎉</div>
+                    <div class="empty-state empty-state-compact">
+                        <div class="empty-state-icon" aria-hidden="true"></div>
                         <h2 class="empty-state-title">You're all set!</h2>
                         <p class="empty-state-text">
                             You can now reset your password from the sign-in page using your security questions and the one-time code you set up.
@@ -204,7 +204,7 @@
         </main>
     </div>
 
-    <script src="/js/app.js"></script>
-    <script src="/js/enroll.js?v=20261029c"></script>
+    <script src="/js/app.js?v=20261118"></script>
+    <script src="/js/enroll.js?v=20261118"></script>
 </body>
 </html>

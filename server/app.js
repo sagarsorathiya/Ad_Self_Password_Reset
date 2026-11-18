@@ -24,7 +24,8 @@ app.use(helmet({
         directives: {
             defaultSrc: ["'self'"],
             scriptSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'"],
+            // No 'unsafe-inline': pages carry no style attributes (scripts may still set element.style)
+            styleSrc: ["'self'"],
             fontSrc: ["'self'"],
             imgSrc: ["'self'", 'data:'],
             connectSrc: ["'self'"],

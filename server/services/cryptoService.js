@@ -70,4 +70,13 @@ function randomHex(bytes = 32) {
     return crypto.randomBytes(bytes).toString('hex');
 }
 
-module.exports = { encrypt, decrypt, randomHex };
+/**
+ * Keyed hash (HMAC-SHA256 with the encryption key) of a mobile number: lets the portal recognise the number a
+ * user verified without storing it.
+ * @param {string} text - a normalized E.164 number
+ */
+function hmac(text) {
+    return crypto.createHmac('sha256', getKeyBuffer()).update(`mobile:${text}`).digest('hex');
+}
+
+module.exports = { encrypt, decrypt, hmac, randomHex };

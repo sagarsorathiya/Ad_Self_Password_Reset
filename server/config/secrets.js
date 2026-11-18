@@ -3,7 +3,10 @@
 //   dpapi-machine:<data>  LocalMachine scope — any process on this server can decrypt
 const { spawnSync } = require('child_process');
 
-const SECRET_KEYS = ['AD_BIND_PASSWORD', 'AD2_BIND_PASSWORD', 'PG_PASSWORD', 'JWT_SECRET', 'TOTP_ENCRYPTION_KEY', 'TLS_PFX_PASSPHRASE', 'SMTP_PASSWORD'];
+const SECRET_KEYS = [
+    'AD_BIND_PASSWORD', 'AD2_BIND_PASSWORD', 'PG_PASSWORD', 'JWT_SECRET', 'TOTP_ENCRYPTION_KEY', 'TLS_PFX_PASSPHRASE',
+    'SMTP_PASSWORD', 'SMS_API_URL', 'SMS_HEADERS',
+];
 
 const DECRYPT_SCRIPT = `
 $ErrorActionPreference = 'Stop'
