@@ -205,6 +205,7 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         listPasswordExpiries,
         setProtectedResetRefused: (value) => { protectedResetRefused = Boolean(value); },
         isServiceAccountPrivileged: async () => false,
+        serviceAccountPrivileged: () => false,
         reset,
         setUnavailable: (value) => { unavailable = Boolean(value); },
         // Tests only: change stored attributes (e.g. userAccountControl); reset() restores the seed

@@ -70,7 +70,19 @@ function isProtectedAccount(user) {
     return String(user?.adminCount) === '1';
 }
 
+/**
+ * Whether self-service reset cannot work for this account: protected (adminCount=1) AND the bind account is known
+ * to be least-privilege. A privileged bind account (AD_ALLOW_PRIVILEGED_BIND) can reset protected accounts, so
+ * nothing is refused up front then; an unknown state (startup check failed) refuses nothing either.
+ * @param {object} user - AD entry
+ * @param {boolean|null} bindPrivileged - ldapService.serviceAccountPrivileged()
+ */
+function resetBlockedForProtected(user, bindPrivileged) {
+    return isProtectedAccount(user) && bindPrivileged === false;
+}
+
 module.exports = {
+    resetBlockedForProtected,
     POLICY_HINTS_OID,
     PolicyHintsControl,
     encodePassword,

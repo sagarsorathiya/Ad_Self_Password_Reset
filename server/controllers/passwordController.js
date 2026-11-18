@@ -13,7 +13,7 @@ const passwordExceptionService = require('../services/passwordExceptionService')
 const passwordSyncService = require('../services/passwordSyncService');
 const notificationService = require('../services/notificationService');
 const sessionService = require('../services/sessionService');
-const { isLockedOut: isAdLockedOut, isProtectedAccount } = require('../services/adPassword');
+const { isLockedOut: isAdLockedOut, resetBlockedForProtected } = require('../services/adPassword');
 const { logAudit } = require('./authController');
 
 const INCORRECT_ANSWERS_MESSAGE = 'One or more answers are incorrect. Please try again.';
@@ -219,8 +219,8 @@ async function verifyUser(req, res) {
             return res.status(400).json({ success: false, message: NOT_ENROLLED_MESSAGE });
         }
 
-        // The least-privilege service account cannot reset protected accounts: say so before any verification
-        if (isProtectedAccount(adUser)) {
+        // A least-privilege service account cannot reset protected accounts: say so before any verification
+        if (resetBlockedForProtected(adUser, ldapService.serviceAccountPrivileged?.() ?? null)) {
             return res.status(400).json({ success: false, code: 'PROTECTED_ACCOUNT', message: PROTECTED_MESSAGE });
         }
 

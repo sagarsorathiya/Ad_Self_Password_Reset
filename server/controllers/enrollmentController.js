@@ -8,7 +8,7 @@ const ldapService = require('../services/ldapService');
 const cryptoService = require('../services/cryptoService');
 const reauthService = require('../services/reauthService');
 const notificationService = require('../services/notificationService');
-const { isProtectedAccount } = require('../services/adPassword');
+const { resetBlockedForProtected } = require('../services/adPassword');
 const { logAudit } = require('./authController');
 const { smsLimitResponse } = require('./passwordController');
 
@@ -609,7 +609,7 @@ async function getStatus(req, res) {
                     changedInDirectory: Boolean(mobile?.changed),
                 },
                 // Protected (administrator) accounts can change but not reset their password here
-                selfServiceReset: !isProtectedAccount(adUser),
+                selfServiceReset: !resetBlockedForProtected(adUser, ldapService.serviceAccountPrivileged?.() ?? null),
                 steps: {
                     securityQuestions: user.security_questions_set ? 'complete' : 'pending',
                     totp: user.totp_enabled ? 'complete' : 'pending',

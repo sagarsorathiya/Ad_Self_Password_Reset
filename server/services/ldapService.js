@@ -15,6 +15,9 @@ function escapeFilterValue(value) {
  * @param {object} ad - Domain settings (config.ad or config.ad.secondary)
  */
 function createDirectory(ad) {
+    // Result of the last isServiceAccountPrivileged() check (startup): null = not known yet
+    let privilegedBind = null;
+
     /**
      * Create an LDAP client connection.
      * @returns {ldap.Client}
@@ -118,7 +121,10 @@ function createDirectory(ad) {
                         privileged = attr?.values?.[0] === '1';
                     });
                     res.on('error', (e) => reject(new Error(`LDAP search error: ${e.message}`)));
-                    res.on('end', () => resolve(privileged));
+                    res.on('end', () => {
+                        privilegedBind = privileged;
+                        resolve(privileged);
+                    });
                 });
             });
         } finally {
@@ -400,6 +406,8 @@ function createDirectory(ad) {
         listPasswordExpiries,
         listSignInAccounts,
         isServiceAccountPrivileged,
+        // true/false once the startup check ran: a privileged bind account CAN reset protected accounts
+        serviceAccountPrivileged: () => privilegedBind,
     };
 }
 

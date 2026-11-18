@@ -4,6 +4,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
     PolicyHintsControl, encodePassword, mapPasswordError, isLockedOut, isPasswordExpired, isProtectedAccount,
+    resetBlockedForProtected,
 } = require('../../server/services/adPassword');
 
 describe('adPassword', () => {
@@ -47,5 +48,14 @@ describe('adPassword', () => {
     test('adminCount=1 marks a protected account', () => {
         assert.equal(isProtectedAccount({ adminCount: '1' }), true);
         assert.equal(isProtectedAccount({ adminCount: undefined }), false);
+    });
+
+    test('reset is refused up front only when the bind account is known to be least-privilege', () => {
+        const admin = { adminCount: '1' };
+        assert.equal(resetBlockedForProtected(admin, false), true);
+        // A privileged bind account (AD_ALLOW_PRIVILEGED_BIND) can reset it; unknown state refuses nothing
+        assert.equal(resetBlockedForProtected(admin, true), false);
+        assert.equal(resetBlockedForProtected(admin, null), false);
+        assert.equal(resetBlockedForProtected({ adminCount: undefined }, false), false);
     });
 });
