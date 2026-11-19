@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 174 automated tests (`node:test`)
+- Tests: 182 automated tests (`node:test`)
 
 ---
 
@@ -224,7 +224,7 @@ node scripts/send-test-mail.js you@corp.example --all   # one sample of every ma
 
 `--all` builds each alert and reminder with the real templates and this server's settings (labels, `PORTAL_URL`, reminder stages), marks the subjects `[Sample]` and sends them only to the address you give, so you can review the formatting in your own mail client.
 
-**Security alert.** After every successful password change or reset, the user gets a plain-text mail with the time, IP address, browser, the method used (change, or reset with questions / authenticator) and which domains were updated, plus "if this wasn't you, contact IT" and the portal address (`PORTAL_URL`). The portal address is the only link in any mail. The address is the user's `mail` attribute in the first domain. Users without one are skipped. The mail is sent after the response, so a slow relay never delays the user, and a mail failure never undoes a password change. Each outcome is audited as `notification`.
+**Security alert.** After every successful password change or reset, the user gets a mail with the time, IP address, device (for example *Chrome 141 on Windows*), the method used (change, or reset with questions / authenticator / SMS) and which domains were updated, plus "was this you?" guidance and a button to the portal (`PORTAL_URL`). Users also get a mail when their recovery settings change (authenticator or mobile number added or replaced, questions changed, enrollment reset, admin rights granted or removed). The portal address is the only link in any mail. The address is the user's `mail` attribute in the first domain. Users without one are skipped. The mail is sent after the response, so a slow relay never delays the user, and a mail failure never undoes a password change. Each outcome is audited as `notification`.
 
 The settings below are the **defaults**; once an admin saves them in **Admin → Mail & Reminders**, the stored values win and `.env` is only the fallback for keys that were never saved there (see §9).
 
@@ -234,39 +234,46 @@ Once an admin saves anything in **Admin → Mail & Reminders**, the panel is aut
 
 **When only the second domain expires passwords** (for example a mail domain with a maximum password age while the sign-in domain has none), set `PASSWORD_REMINDER_SOURCE=secondary`. The expiry is then read from the second domain, but reminders still go only to users with an **enabled account in the first domain**, at that account's `mail` address. Second-domain accounts without a first-domain account, and accounts the sync never writes (disabled, `adminCount=1`, the `AD2_BIND_DN` account), get no reminder, because changing the password in the portal wouldn't help them. Whenever a second domain is configured, reminders point users to the portal only (Ctrl+Alt+Del would change just one domain).
 
-**What users receive** (plain text, from `MAIL_FROM`; "Desktop"/"Mail" are `AD_DOMAIN_LABEL`/`AD2_DOMAIN_LABEL`, the sign-off uses `PORTAL_NAME`):
+**How the mails look.** Every mail is sent as *multipart/alternative*: a formatted HTML part and a plain-text part with the same content, for clients that do not show HTML. The layout matches the portal (dark header bar with `PORTAL_NAME`, a details table, coloured notice boxes, numbered steps, one button) and is built for mail clients and spam filters:
+
+- no images, web fonts, scripts or remote resources (nothing is fetched when the mail is opened); all styles are inline
+- the portal address is the only link, and its visible text is the address itself
+- no capitals for emphasis, no exclamation marks, no urgency words in subjects; every value from AD is escaped
+- a footer that says why the reader got the mail, that IT never asks for passwords, and that replies are not read
+- `MAIL_FROM` without a display name gets `PORTAL_NAME` as one (`"Password Portal" <portal@corp.example>`)
+- headers `Auto-Submitted: auto-generated` and `X-Auto-Response-Suppress: All`, so out-of-office replies are not sent back
+
+Example (plain-text part of a reset alert; "Desktop"/"Mail" are `AD_DOMAIN_LABEL`/`AD2_DOMAIN_LABEL`):
 
 ```
-Subject: Your password was reset
+Password Portal
+===============
+
+Your password was reset
 
 Hello Jane Doe,
 
-The password for your account "jdoe" was reset with "Forgot password" (verified with: authenticator app).
+The password for your account jdoe was reset with Forgot password. Here
+are the details so you can check that it was you.
 
-When:      12 Oct 2026, 14:05 (Europe/Berlin)
-From IP:   192.0.2.10
-Browser:   Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...
-Updated:   Desktop, Mail
+Account:       jdoe
+Date and time: 12 Oct 2026, 14:05 (Europe/Berlin)
+How:           Forgot password, verified with authenticator app
+Updated in:    Desktop and Mail
+IP address:    192.0.2.10
+Device:        Chrome 141 on Windows
 
-If this was you, no action is needed.
-If this was NOT you, contact IT immediately: someone else may have access to your account.
+>> Was this you?
+If you made this change, no action is needed. If you did not make this
+change, contact IT immediately: someone else may know your password or be
+able to reset it.
 
-Password portal: https://password.corp.example
+Open the password portal: https://password.corp.example
 ```
 
-```
-Subject: Your Mail password expires in 7 days
+Reminders show the account, which password expires, the date and the days left, numbered steps to change it, and (three days or less before expiry) a "please change it today" box. With a second domain they say that the portal updates both passwords; without one they also mention Ctrl+Alt+Del. Run `node scripts/send-test-mail.js you@corp.example --all` to receive one sample of every mail.
 
-Hello Jane Doe,
-
-The Mail password for your account "jdoe" expires in 7 days, on Monday, 19 October 2026.
-Please change it before then; after it expires you cannot sign in until it is reset.
-
-Change it at https://password.corp.example (sign in, then choose Change Password).
-This updates both your Desktop and Mail passwords.
-```
-
-A change while signed in says *was changed* instead of *was reset*, and the last reminder says *expires tomorrow*. Without a second domain, reminders say *Your password expires...* and also mention Ctrl+Alt+Del. Every mail ends with "Never share your password. IT will never ask for it by email or phone." and a do-not-reply line.
+**Deliverability.** Formatting helps, but whether a mail lands in the inbox is mostly decided by the sender domain. Use a `MAIL_FROM` address in a domain your relay is allowed to send for, and make sure that domain has SPF (and ideally DKIM and DMARC) records that cover the relay. For mail that never leaves your own Exchange/Microsoft 365 organisation, allow the relay's connector or the portal server's IP so internal anti-spam does not score it as external. Send a test mail from the admin panel and check that it arrives in the inbox, not in junk.
 
 Before switching reminders on, see who would get one (nothing is sent):
 

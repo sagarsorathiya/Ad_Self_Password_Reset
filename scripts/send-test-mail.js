@@ -1,5 +1,5 @@
-// Sends one test message through the SMTP settings in .env, or (--all) one sample of every mail users can get,
-// built by the real templates with this server's settings. Samples are marked [Sample] and use your address only.
+// Sends one test message through the SMTP settings in .env, or (--all) one sample of every mail the portal sends,
+// built by the real templates with this server's settings. Samples are marked [Sample] and go to your address only.
 // Usage (from the project folder): node scripts/send-test-mail.js someone@corp.example [--all]
 const config = require('../server/config/default');
 const mailService = require('../server/services/mailService');
@@ -28,13 +28,22 @@ function samples(to) {
         ['alert after change (signed in)', notificationService.passwordChangedMessage({ ...alert, method: 'authenticated', sync: synced })],
     ];
     if (secondary) {
-        list.push(['alert when the second domain was NOT updated', notificationService.passwordChangedMessage({
+        list.push(['alert when the second domain was not updated', notificationService.passwordChangedMessage({
             ...alert, method: 'authenticated', sync: { domain: secondary, status: 'failed' },
         })]);
     }
+    list.push(['security settings changed', notificationService.securityChangeMessage({
+        ...alert, change: 'Text-message codes were set up for +91 •••••••• 10',
+    })]);
     for (const days of [...config.reminders.days].sort((a, b) => b - a)) {
         list.push([`reminder ${days} day(s) before expiry`, reminder(days)]);
     }
+    list.push(['password has expired', notificationService.passwordExpiredMessage({
+        ...person, domain: reminderDomain, expiresAt: new Date(Date.now() - DAY_MS),
+    })]);
+    list.push(['admin notice: protected setting changed', notificationService.settingChangedMessage({
+        actor: 'sample.admin', labels: ['Reset verification policy'], ip: alert.ip,
+    })]);
     return list;
 }
 
@@ -52,15 +61,16 @@ async function main() {
     if (!process.argv.includes('--all')) {
         await mailService.send({
             to,
-            subject: `${config.mail.portalName}: test message`,
-            text: `This test message from ${config.mail.portalName} confirms that outgoing mail works.`,
+            ...notificationService.testMessage({
+                host: config.mail.host, port: config.mail.port, from: config.mail.from, requestedBy: 'send-test-mail.js',
+            }),
         });
         console.log(`Sent to ${to} via ${config.mail.host}:${config.mail.port} (from ${config.mail.from}).`);
         return;
     }
 
     for (const [label, message] of samples(to)) {
-        await mailService.send({ to, subject: `[Sample] ${message.subject}`, text: message.text });
+        await mailService.send({ to, ...message, subject: `[Sample] ${message.subject}` });
         console.log(`  sent: ${label}`);
     }
     console.log(`Samples sent to ${to} via ${config.mail.host}:${config.mail.port} (from ${config.mail.from}).`);

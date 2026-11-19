@@ -54,6 +54,9 @@ async function waitForNotification(username) {
     throw new Error(`No notification audit row for ${username}`);
 }
 
+// The text part wraps at 76 characters; phrases are checked with the line breaks flattened
+const flat = (text) => text.replace(/\s+/g, ' ');
+
 // Enrolling sends its own security alert after the response: let it land, then count from zero
 async function afterEnrolment(username) {
     for (let i = 0; i < 50; i++) {
@@ -87,12 +90,37 @@ describe('password-changed alert', () => {
         assert.equal(sent[0].to, 'jsmith@example.local');
         assert.equal(sent[0].from, 'Password Portal <portal@example.test>');
         assert.equal(sent[0].subject, 'Your password was changed');
-        assert.match(sent[0].text, /From IP:\s+\S*127\.0\.0\.1/);
-        assert.match(sent[0].text, /Browser:\s+\S+/);
-        assert.match(sent[0].text, /If this was NOT you, contact IT immediately/);
-        assert.match(sent[0].text, /Password portal: https:\/\/portal\.example\.test/);
+        assert.match(sent[0].text, /IP address:\s+\S*127\.0\.0\.1/);
+        assert.match(sent[0].text, /Device:\s+\S+/);
+        assert.match(sent[0].text, /How:\s+Signed in with the current password/);
+        assert.match(flat(sent[0].text), /If you did not make this change, contact IT immediately/);
+        assert.match(sent[0].text, /Open the password portal: https:\/\/portal\.example\.test/);
         assert.equal(sent[0].text.match(/https?:\/\//g).length, 1, 'the portal URL is the only address');
         assert.doesNotMatch(sent[0].text, new RegExp(NEW_PASSWORD), 'never the password');
+
+        // The HTML part says the same, links only to the portal and loads nothing from anywhere
+        const { html } = sent[0];
+        assert.match(html, /^<!DOCTYPE html>/);
+        assert.match(html, /Your password was changed/);
+        assert.match(html, /If you did not make this change, contact IT immediately/);
+        const links = [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+        assert.ok(links.length > 0);
+        assert.ok(links.every((l) => l === 'https://portal.example.test'), `only the portal is linked: ${links}`);
+        assert.doesNotMatch(html, /<img|<script|<link|url\(/i, 'no images, scripts or external resources');
+        assert.doesNotMatch(html, new RegExp(NEW_PASSWORD), 'never the password');
+        assert.equal(sent[0].headers['Auto-Submitted'], 'auto-generated');
+    });
+
+    test('a bare From address gets the portal name as its display name', async () => {
+        const settingsService = require('../../server/services/settingsService');
+        settingsService.current().mail.from = 'portal@example.test';
+        try {
+            await changePassword('jsmith', 'Passw0rd!');
+            await waitForNotification('jsmith');
+            assert.deepEqual(sent[0].from, { name: 'Test Portal', address: 'portal@example.test' });
+        } finally {
+            await settingsService.refresh();
+        }
     });
 
     test('is mailed after a reset and names the verification method', async () => {
@@ -112,7 +140,7 @@ describe('password-changed alert', () => {
         await waitForNotification('mjones');
         assert.equal(sent[0].to, 'mjones@example.local');
         assert.equal(sent[0].subject, 'Your password was reset');
-        assert.match(sent[0].text, /verified with: security questions/);
+        assert.match(sent[0].text, /Forgot password, verified with security questions/);
     });
 
     test('enrolling sends a security alert naming the change', async () => {
@@ -122,7 +150,8 @@ describe('password-changed alert', () => {
         assert.equal(sent[0].to, 'jsmith@example.local');
         assert.equal(sent[0].subject, 'Your password reset settings changed');
         assert.match(sent[0].text, /enrolled for self-service password reset/);
-        assert.match(sent[0].text, /If this was NOT you, contact IT immediately/);
+        assert.match(flat(sent[0].text), /If you did not make this change, contact IT immediately/);
+        assert.match(sent[0].html, /What changed/);
     });
 
     test('is skipped (and audited) when the account has no mail address', async () => {

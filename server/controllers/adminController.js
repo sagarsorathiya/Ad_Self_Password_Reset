@@ -848,8 +848,7 @@ async function sendTestMail(req, res) {
         const { host, port, from } = settingsService.current().mail;
         await mailService.send({
             to,
-            subject: `${settingsService.current().mail.portalName}: test message`,
-            text: notificationService.testMessage({ host, port, from, requestedBy: req.user.username }),
+            ...notificationService.testMessage({ host, port, from, requestedBy: req.user.username }),
         });
         await logAudit(req.user.userId, req.user.username, 'mail_test', null, req, true, `Test mail sent to ${to}`);
 
