@@ -60,6 +60,20 @@ describe('mailTemplate', () => {
         assert.doesNotMatch(text, /https?:\/\//);
     });
 
+    test('the category shows in the header of both parts', () => {
+        const { text, html } = render({ ...BASE, category: 'Security alert' });
+        assert.match(text, /^Test Portal - Security alert$/m);
+        assert.match(html, />Security alert</);
+    });
+
+    test('layout survives Outlook: spacing from cell padding, button padding on its cell', () => {
+        const { html } = render(BASE);
+        // Outlook's Word engine ignores margins on tables and padding on links
+        assert.doesNotMatch(html, /<table[^>]*style="[^"]*margin/i, 'no table margins');
+        assert.match(html, /mso-padding-alt:12px 26px/);
+        assert.match(html, /mso-line-height-rule:exactly/);
+    });
+
     test('a single notice works as well as a list', () => {
         const { text } = render({ ...BASE, notices: undefined, notice: { text: 'Only one notice.' } });
         assert.match(text, /Only one notice\./);

@@ -234,7 +234,7 @@ Once an admin saves anything in **Admin → Mail & Reminders**, the panel is aut
 
 **When only the second domain expires passwords** (for example a mail domain with a maximum password age while the sign-in domain has none), set `PASSWORD_REMINDER_SOURCE=secondary`. The expiry is then read from the second domain, but reminders still go only to users with an **enabled account in the first domain**, at that account's `mail` address. Second-domain accounts without a first-domain account, and accounts the sync never writes (disabled, `adminCount=1`, the `AD2_BIND_DN` account), get no reminder, because changing the password in the portal wouldn't help them. Whenever a second domain is configured, reminders point users to the portal only (Ctrl+Alt+Del would change just one domain).
 
-**How the mails look.** Every mail is sent as *multipart/alternative*: a formatted HTML part and a plain-text part with the same content, for clients that do not show HTML. The layout matches the portal (dark header bar with `PORTAL_NAME`, a details table, coloured notice boxes, numbered steps, one button) and is built for mail clients and spam filters:
+**How the mails look.** Every mail is sent as *multipart/alternative*: a formatted HTML part and a plain-text part with the same content, for clients that do not show HTML. The layout matches the portal (dark header bar with `PORTAL_NAME` and the kind of mail - *Security alert*, *Password reminder*, *Administrator notice* - a details table, coloured notice boxes, numbered steps, one button, a shaded footer) and is built for mail clients, including Outlook's Word renderer (spacing from cell padding only, a button that keeps its padding, fixed line heights), and for spam filters:
 
 - no images, web fonts, scripts or remote resources (nothing is fetched when the mail is opened); all styles are inline
 - the portal address is the only link, and its visible text is the address itself
@@ -243,11 +243,13 @@ Once an admin saves anything in **Admin → Mail & Reminders**, the panel is aut
 - `MAIL_FROM` without a display name gets `PORTAL_NAME` as one (`"Password Portal" <portal@corp.example>`)
 - headers `Auto-Submitted: auto-generated` and `X-Auto-Response-Suppress: All`, so out-of-office replies are not sent back
 
+The notice that goes to every portal admin after a protected setting changed names each setting with its new value (for the reset policy also the previous one), who changed it, when and from which IP address. Gateway credentials are never put in a mail.
+
 Example (plain-text part of a reset alert; "Desktop"/"Mail" are `AD_DOMAIN_LABEL`/`AD2_DOMAIN_LABEL`):
 
 ```
-Password Portal
-===============
+Password Portal - Security alert
+================================
 
 Your password was reset
 
@@ -257,7 +259,7 @@ The password for your account jdoe was reset with Forgot password. Here
 are the details so you can check that it was you.
 
 Account:       jdoe
-Date and time: 12 Oct 2026, 14:05 (Europe/Berlin)
+Date and time: 12 Oct 2026, 14:05 Central European Summer Time
 How:           Forgot password, verified with authenticator app
 Updated in:    Desktop and Mail
 IP address:    192.0.2.10

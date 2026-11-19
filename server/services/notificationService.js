@@ -19,6 +19,16 @@ const VERIFIED_WITH = {
 const dateTime = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 const dateOnly = new Intl.DateTimeFormat('en-GB', { dateStyle: 'full' });
 const TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+// "India Standard Time" rather than the IANA id "Asia/Calcutta"
+const zoneName = new Intl.DateTimeFormat('en-GB', { timeZoneName: 'long' });
+
+// The small label on the right of the mail header
+const CATEGORY = {
+    security: 'Security alert',
+    reminder: 'Password reminder',
+    admin: 'Administrator notice',
+    test: 'Test message',
+};
 
 const WAS_THIS_YOU = 'If you made this change, no action is needed. If you did not make this change, contact IT immediately: '
     + 'someone else may know your password or be able to reset it.';
@@ -36,7 +46,8 @@ function greeting(displayName, username) {
 }
 
 function when(date = new Date()) {
-    return `${dateTime.format(date)} (${TIME_ZONE})`;
+    const zone = zoneName.formatToParts(date).find((part) => part.type === 'timeZoneName')?.value || TIME_ZONE;
+    return `${dateTime.format(date)} ${zone}`;
 }
 
 // Small print: why the reader got this mail, the phishing reminder, and that replies are not read
@@ -78,6 +89,7 @@ function passwordChangedMessage({ username, displayName, method, ip, userAgent, 
 
     return render({
         portalName: portalName(),
+        category: CATEGORY.security,
         subject: heading,
         heading,
         preheader: `The password for ${username} was ${isReset ? 'reset' : 'changed'} on ${dateTime.format(at)}.`,
@@ -131,6 +143,7 @@ function passwordExpiringMessage({ username, displayName, expiresAt, daysLeft, d
 
     return render({
         portalName: portalName(),
+        category: CATEGORY.reminder,
         subject,
         heading: subject,
         preheader: `Change your ${which} before ${dateOnly.format(expiresAt)}.`,
@@ -174,6 +187,7 @@ function passwordExpiredMessage({ username, displayName, expiresAt, domain = nul
 
     return render({
         portalName: portalName(),
+        category: CATEGORY.reminder,
         subject,
         heading: subject,
         preheader: `Set a new ${which} with Forgot password.`,
@@ -199,6 +213,7 @@ function securityChangeMessage({ username, displayName, change, ip, userAgent, w
     const subject = 'Your password reset settings changed';
     return render({
         portalName: portalName(),
+        category: CATEGORY.security,
         subject,
         heading: subject,
         preheader: `${change}.`,
@@ -271,26 +286,33 @@ async function sendSecurityChangeAlert({ userId, username, change, req }) {
 
 /**
  * Body of the notice to portal admins after a protected setting changed.
- * @param {object} p - { actor, labels: string[], ip, when }
+ * @param {object} p - { actor, changes: [{label, value}], ip, when }  value = the new value in words (secrets: hidden)
+ *   (older callers may pass labels: string[] instead of changes)
  */
-function settingChangedMessage({ actor, labels, ip, when: at = new Date() }) {
-    const subject = 'Portal security setting changed';
+function settingChangedMessage({ actor, changes, labels, ip, when: at = new Date() }) {
+    const list = changes || (labels || []).map((label) => ({ label, value: 'Changed' }));
+    const subject = list.length === 1 ? `Portal setting changed: ${list[0].label}` : 'Portal security settings changed';
     return render({
         portalName: portalName(),
+        category: CATEGORY.admin,
         subject,
-        heading: subject,
-        preheader: `${actor} changed: ${labels.join(', ')}.`,
-        intro: [`${actor} changed security settings of ${portalName()}. These settings decide how users prove their identity and where reset codes are sent.`],
+        heading: list.length === 1 ? 'A portal security setting was changed' : 'Portal security settings were changed',
+        preheader: `${actor} changed ${list.map((c) => c.label).join(', ')}.`,
+        intro: [
+            `${actor} changed ${list.length === 1 ? 'a setting that decides' : 'settings that decide'} how users prove `
+            + `their identity and where reset codes are sent. Every administrator of ${portalName()} receives this notice.`,
+        ],
         details: [
+            ...list.map((c) => [c.label, c.value]),
             ['Changed by', actor],
-            ['Settings', labels.join(', ')],
             ['Date and time', when(at)],
             ['IP address', ip || 'Unknown'],
         ],
         notices: [{
             tone: 'warning',
-            title: 'Not agreed?',
-            text: 'If this change was not agreed, review Administration > Verification and the audit log now.',
+            title: 'Did you expect this change?',
+            text: 'If not, check the change in Administration > Verification and the audit log, and review who has '
+                + 'administrator rights. Only members of the directory admin group can make it, with their Windows password.',
         }],
         action: portalAction('Open the portal'),
         footer: adminFooter(),
@@ -299,12 +321,12 @@ function settingChangedMessage({ actor, labels, ip, when: at = new Date() }) {
 
 /**
  * To every portal admin with a mail address after a protected setting changed. Never throws.
- * @param {object} p - { actor, labels: string[], req, recipients: string[] }
+ * @param {object} p - { actor, changes: [{label, value}], req, recipients: string[] }
  */
-async function sendSettingChangedNotice({ actor, labels, req, recipients }) {
+async function sendSettingChangedNotice({ actor, changes, labels, req, recipients }) {
     if (!mailService.isEnabled() || recipients.length === 0) return;
     try {
-        await mailService.send({ to: recipients.join(', '), ...settingChangedMessage({ actor, labels, ip: req.ip }) });
+        await mailService.send({ to: recipients.join(', '), ...settingChangedMessage({ actor, changes, labels, ip: req.ip }) });
         await logAudit(null, actor, 'notification', null, req, true, `Setting change notice sent to ${recipients.length} admin(s)`);
     } catch (err) {
         console.error(`[Mail] Setting change notice failed: ${err.message}`);
@@ -320,6 +342,7 @@ async function sendSettingChangedNotice({ actor, labels, req, recipients }) {
 function testMessage({ host, port, from, requestedBy }) {
     return render({
         portalName: portalName(),
+        category: CATEGORY.test,
         subject: `${portalName()}: test message`,
         heading: 'Test message',
         preheader: 'Outgoing mail from the password portal works.',

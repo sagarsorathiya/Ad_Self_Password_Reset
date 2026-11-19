@@ -758,6 +758,38 @@ async function getSettings(req, res) {
     }
 }
 
+const POLICY_WORDS = {
+    both: 'Security questions and a one-time code',
+    either: 'Security questions or a one-time code',
+    totp_only: 'A one-time code only',
+};
+
+/**
+ * The new value of a protected setting in words, for the notice to the other admins. Gateway credentials
+ * (URL, headers) and the body template are never put in a mail.
+ * @param {string} key - one of settingsService.PROTECTED_KEYS
+ * @param {string} policyBefore - reset policy before the save
+ */
+function describeProtectedValue(key, policyBefore) {
+    const current = settingsService.current();
+    switch (key) {
+        case 'reset.policy': {
+            const after = settingsService.resetPolicy();
+            return `${POLICY_WORDS[after] || after} (before: ${POLICY_WORDS[policyBefore] || policyBefore})`;
+        }
+        case 'factors.totp':
+            return current.factors.totp ? 'Offered to users' : 'Switched off';
+        case 'factors.sms':
+            return current.factors.sms ? 'Offered to users' : 'Switched off';
+        case 'sms.method':
+            return current.sms.method;
+        case 'sms.url':
+            return `Changed (now sends to ${smsService.describeGateway().host || 'no gateway'})`;
+        default:
+            return 'Changed (value not shown)';
+    }
+}
+
 /**
  * PUT /api/admin/settings
  * Body: { settings: { 'mail.host': '...', 'reminders.days': '14,7,1', ... } }
@@ -812,7 +844,10 @@ async function updateSettings(req, res) {
             db.query("SELECT email FROM users WHERE is_portal_admin = TRUE AND COALESCE(email, '') <> ''")
                 .then(({ rows }) => notificationService.sendSettingChangedNotice({
                     actor: req.user.username,
-                    labels: sensitive.map((key) => settingsService.FIELDS[key].label),
+                    changes: sensitive.map((key) => ({
+                        label: settingsService.FIELDS[key].label,
+                        value: describeProtectedValue(key, policyBefore),
+                    })),
                     req,
                     recipients: rows.map((r) => r.email),
                 }))

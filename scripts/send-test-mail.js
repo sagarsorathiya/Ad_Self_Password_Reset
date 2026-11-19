@@ -42,7 +42,8 @@ function samples(to) {
         ...person, domain: reminderDomain, expiresAt: new Date(Date.now() - DAY_MS),
     })]);
     list.push(['admin notice: protected setting changed', notificationService.settingChangedMessage({
-        actor: 'sample.admin', labels: ['Reset verification policy'], ip: alert.ip,
+        actor: 'sample.admin', ip: alert.ip,
+        changes: [{ label: 'Reset verification policy', value: 'Security questions and a one-time code (before: Security questions or a one-time code)' }],
     })]);
     return list;
 }
