@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 136 automated tests (`node:test`)
+- Tests: 174 automated tests (`node:test`)
 
 ---
 
@@ -31,15 +31,15 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 | Area | Details |
 |---|---|
-| Sign-in | AD credentials checked by an LDAP bind. JWT access token (15 min) plus refresh token (7 days). |
-| Enrollment | 3 security questions (answers hashed with bcrypt) plus a second factor: an authenticator app (QR code or manual key) and/or an SMS code. |
-| Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes. |
-| Change password | For signed-in users who have completed enrollment. The current password is checked against AD. |
+| Sign-in | AD credentials checked by an LDAP bind. JWT access token (15 min) plus refresh token (7 days); sessions end on sign-out, lock, password change or reset, and after 30 idle minutes. An expired password leads straight to Forgot password. |
+| Enrollment | 2-5 security questions (default 3, answers hashed with bcrypt) plus a second factor: an authenticator app (QR code or manual key) and/or an SMS code. The user receives a mail whenever these settings change. |
+| Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes. What must be proved (questions and a code, either, or a code only) is an admin setting. A reset also clears an AD lockout. |
+| Change password | For signed-in users who have completed enrollment. A real user change in AD, so password history and minimum age apply (resets enforce history too). |
 | Second domain (optional) | Every change and reset also sets the same password in a second domain (same username), e.g. a separate mail domain. See §5.1. |
 | Mail (optional) | Security alert after every password change or reset (time, IP address, browser, method). Daily reminders before the password expires. See §5.2. |
-| Admin panel | Enrollment stats, user search and filters, lock/unlock, enrollment reset, portal admins, audit log viewer, security question management, password exception list (blocked words), mail and expiry-reminder settings with test mail and manual run. |
+| Admin panel | Enrollment stats, user search, filters and last activity, lock/unlock, enrollment reset, portal admins, audit log viewer with retention, security question management, password exception list (blocked words), reset policy and sign-in/reset rules, second factors and SMS gateway, mail and expiry-reminder settings with test mail and manual run. |
 | SMS codes (optional) | A 6-digit code texted through any HTTP SMS gateway. The number comes from the directory's `mobile` attribute; users without one enter theirs during enrollment. See §5.3. |
-| Security | Rate limiting, account lockout, TOTP replay protection, single-use SMS codes with a resend cooldown, refresh-token revocation, audit log, CSP/Helmet. |
+| Security | Rate limiting, configurable reset lockout, TOTP replay protection, single-use SMS codes with a resend cooldown and daily caps, pinned mobile numbers, session revocation, re-authentication for sensitive changes, optional hiding of account state, audit log, strict CSP (no inline scripts or styles). |
 
 ## 2. Architecture
 
@@ -319,7 +319,7 @@ SMS_BODY_TYPE=json
 SMS_BODY_TEMPLATE={"to": "{mobile}", "text": "{message}", "from": "{sender}"}
 ```
 
-**Where the number comes from.** The portal reads the `mobile` attribute of the user's AD account (no extra permission needed: the service account already reads users). A user without one is asked for a number during enrollment; that number is stored **encrypted in the portal database** and is never written back to Active Directory. Either way the number is only used once a code sent to it has been entered, and a verified portal number takes precedence over a later AD entry.
+**Where the number comes from.** The portal reads the `mobile` attribute of the user's AD account (no extra permission needed: the service account already reads users). A user without one is asked for a number during enrollment; that number is stored **encrypted in the portal database** and is never written back to Active Directory. Either way the number is only used once a code sent to it has been entered, and a verified portal number takes precedence over a later AD entry. A verified AD number is pinned: if the `mobile` attribute changes later, no codes are sent until the user confirms the new number in Security Settings.
 
 **Operator-registered templates.** Some countries only deliver messages that match a template registered in advance (DLT in India). Put the registered text in `SMS_MESSAGE_TEMPLATE` with `{otp}` where the code belongs; *Send Test SMS* sends that same template with a throwaway code, so a passing test means real codes will arrive too.
 
@@ -450,7 +450,7 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 |---|---|
 | Password theft from the database | Passwords are never stored; all operations go to AD over LDAPS |
 | Database leak | Answers and SMS codes hashed with bcrypt; TOTP secrets and portal-stored mobile numbers encrypted with AES-256-GCM |
-| Brute force | Per IP+username rate limit (5 per 15 min; authenticator QR generation has a separate, looser limit); account lockout after 5 failed verifications (30 min); generic error messages |
+| Brute force | Per IP+username rate limit (5 per 15 min; authenticator QR generation has a separate, looser limit; *Change Password* is limited too, so wrong current passwords cannot lock the AD account); self-service reset pauses after 5 failed verifications for 30 minutes (both adjustable in Admin → Verification); generic error messages |
 | User enumeration | Unknown and not-enrolled users get the same response from the verification steps; login errors don't reveal whether the user exists. With *Hide account state* on, the first reset step and sign-in also answer every username the same way (no enrolled/disabled/locked/expired detail). |
 | Reset token replay | Single-use JWT (10 min) claimed atomically in `used_reset_tokens`; forged or wrong-type tokens rejected |
 | TOTP code replay | Last accepted time step stored per user; a code can't be reused, including the one entered at enrollment |
