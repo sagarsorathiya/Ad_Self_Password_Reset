@@ -239,7 +239,8 @@ describe('admin guards', () => {
     });
 
     test('the minimum password length comes from the settings', async () => {
-        assert.deepEqual((await api('GET', '/api/password/rules')).body.data, { minLength: 8, complexity: true });
+        assert.deepEqual((await api('GET', '/api/password/rules')).body.data,
+            { minLength: 8, complexity: true, historyCount: 3, minAgeDays: 0 });
         await saveSetting({ 'security.passwordMinLength': '12' });
         assert.equal((await api('GET', '/api/password/rules')).body.data.minLength, 12);
 

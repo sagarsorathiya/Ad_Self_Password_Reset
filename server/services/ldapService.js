@@ -339,6 +339,55 @@ function createDirectory(ad) {
     }
 
     /**
+     * Attributes of one object (base search), or null when it does not exist or cannot be read.
+     * @param {string} dn
+     * @param {string[]} attributes
+     */
+    async function readObject(dn, attributes) {
+        const client = await bindServiceAccount();
+        try {
+            return await new Promise((resolve, reject) => {
+                client.search(dn, { scope: 'base', filter: '(objectClass=*)', attributes }, (err, res) => {
+                    if (err) {
+                        reject(new Error(`LDAP search failed: ${err.message}`));
+                        return;
+                    }
+                    let found = null;
+                    res.on('searchEntry', (entry) => { found = entryAttributes(entry); });
+                    res.on('error', (e) => reject(new Error(`LDAP search error: ${e.message}`)));
+                    res.on('end', () => resolve(found));
+                });
+            });
+        } finally {
+            client.unbind(() => {});
+        }
+    }
+
+    /**
+     * The default domain password policy, read from the domain root (AD_BASE_DN).
+     * @returns {Promise<object|null>} minPwdLength, pwdProperties, pwdHistoryLength, minPwdAge
+     */
+    async function getDomainPasswordPolicy() {
+        return readObject(ad.baseDN, ['minPwdLength', 'pwdProperties', 'pwdHistoryLength', 'minPwdAge']);
+    }
+
+    /**
+     * The fine-grained password policy (PSO) that applies to this user, or null when the domain policy applies.
+     * msDS-ResultantPSO is a constructed attribute (base search on the user only); reading the PSO itself needs
+     * read access to the Password Settings Container (Domain Admins by default) - without it, null.
+     * @param {string} userDN
+     */
+    async function getResultantPasswordPolicy(userDN) {
+        const user = await readObject(userDN, ['msDS-ResultantPSO']);
+        const psoDN = user?.['msDS-ResultantPSO'];
+        if (!psoDN) return null;
+        return readObject(psoDN, [
+            'msDS-MinimumPasswordLength', 'msDS-PasswordComplexityEnabled',
+            'msDS-PasswordHistoryLength', 'msDS-MinimumPasswordAge',
+        ]);
+    }
+
+    /**
      * Clear an AD lockout (lockoutTime = 0). Needs "Write lockoutTime" on user objects for the service account.
      * @param {string} userDN
      */
@@ -403,6 +452,8 @@ function createDirectory(ad) {
         changePassword,
         changePasswordWithOld,
         unlockAccount,
+        getDomainPasswordPolicy,
+        getResultantPasswordPolicy,
         listPasswordExpiries,
         listSignInAccounts,
         isServiceAccountPrivileged,

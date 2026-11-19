@@ -4,7 +4,7 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 - Backend: Node.js 20+ (tested on 24), Express 5, `ldapjs`, PostgreSQL
 - Frontend: plain HTML/CSS/JS with no build step and no external CDN or font requests, so it works on isolated networks
-- Tests: 182 automated tests (`node:test`)
+- Tests: 199 automated tests (`node:test`)
 
 ---
 
@@ -294,7 +294,7 @@ The dry run lists each user who is due (username, days left, address) and a summ
 52 due (reminder goes to the Desktop mail address)
 ```
 
-The service account only needs to read users (the default for domain users). Run `npm run db:init` once after upgrading, to create the `password_reminders` table.
+The service account only needs to read users (the default for domain users). To name the exact policy rule a password breaks, the portal also reads the domain policy from the domain root (readable by authenticated users) and, if one applies, the user's fine-grained password policy (readable by Domain Admins by default; without that access the domain policy is used). Run `npm run db:init` once after upgrading, to create the `password_reminders` table.
 
 ### 5.3 SMS one-time codes (optional)
 
@@ -433,7 +433,7 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
    - **Text message (SMS):** shows the number codes go to, and lets you switch to a new one. Codes keep going to the old number until you enter a code sent to the new one.
    - Once you have finished enrollment, **any** change here asks for your current Windows password — including *adding* the second method you didn't set up originally. That is deliberate: it stops someone who gets hold of your signed-in browser from pointing password recovery at their own phone or authenticator.
 6. **Emails** (if your organization turned them on): after every password change or reset you get an email with the time, IP address and browser. If you didn't make the change, contact IT immediately. Before your password expires you get reminders (by default 14, 7, 3 and 1 days before). Change your password in the portal when you get one.
-7. **Password rules:** the page shows the minimum length your administrator set, and (when the domain requires it) 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username or a part of your name. A recently used password is refused, and a password can't be changed again too soon after the last change if the domain sets a minimum password age.
+7. **Password rules:** the page shows the domain's minimum length and (when the domain requires it) 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username or a part of your name. A recently used password is refused, and a password can't be changed again too soon after the last change if the domain sets a minimum password age. When a password is not accepted, the page says exactly why - for example *Use at least 12 characters (this one has 9)*, *it has only lowercase letters and numbers*, *It must not contain your username*, *It matches one of your last 24 passwords*, or *You can change it again from 20 Nov 2026, 10:05* - instead of a general "does not meet the policy".
 8. **Expired password or "must change at next logon":** signing in tells you so and links to Forgot password, with your username filled in. A reset also clears an AD lockout.
 9. **Signed out?** The portal signs you out after 30 minutes without activity, and everywhere at once after a password change or reset, so a session someone else may have opened ends too.
 
@@ -467,6 +467,7 @@ Help-desk procedure for a user who lost their phone: check the user's identity b
 | Codes sent to an attacker's phone | Numbers come from AD; a number a user supplies is only stored once a code sent to it is entered, and changing a verified number needs the current Windows password. A directory number is pinned (keyed hash) when it is verified: if the AD `mobile` attribute changes later, no code is sent until the user confirms the new number. |
 | SMS cost and flooding | Per-user and portal-wide daily caps, a 60-second resend cooldown enforced under a lock, and decoy answers for accounts without SMS (nothing is sent) |
 | Password reuse | Authenticated changes are real user changes and resets use the policy hints control, so AD's password history and minimum age apply to both |
+| Unclear policy errors | The portal reads the effective policy (domain policy, or the user's fine-grained policy) and names each broken rule; a refusal only AD can judge is explained as history or minimum age (`400 PASSWORD_POLICY`, `data.problems`). The password itself is never logged; audit rows record only the rule names. |
 | Security question bypass | Every stored question must be answered exactly once |
 | Weak security questions | `RESET_POLICY=both` (default) requires questions **and** a one-time code (authenticator or SMS). The questions step only yields a 5-minute step token bound to that user, which is useless as a session or reset token. |
 | Secrets in config files | `.env` secrets DPAPI-encrypted (`protect-secret.ps1`); PFX private key protected by a random DPAPI-encrypted passphrase and git-ignored |
@@ -506,7 +507,7 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | POST | `/api/enrollment/sms/verify` | user | `{ code }` from the text message; stores the number and enables SMS |
 | GET | `/api/enrollment/status` | user | – |
 | POST | `/api/password/change` | user | `{ currentPassword, newPassword, confirmPassword }`. Enrolled users only; otherwise 403 with `code: 'ENROLLMENT_REQUIRED'`. Ends all sessions on success. |
-| GET | `/api/password/rules` | – | → `{ minLength, complexity }` |
+| GET | `/api/password/rules` | – | → `{ minLength, complexity, historyCount, minAgeDays }` (admin settings tightened by the domain policy) |
 | POST | `/api/password/reset/verify-user` | – | `{ username }` → `username` (directory spelling), `availableMethods`, `mobileMasked`; 400 `PROTECTED_ACCOUNT` for administrator accounts. With *Hide account state*: the same answer for every username, `generic: true`. |
 | POST | `/api/password/reset/get-questions` | – | `{ username }` |
 | POST | `/api/password/reset/verify-questions` | – | `{ username, answers }` → `resetToken` (`either`) or `stepToken` + `nextSteps` (`both`) |

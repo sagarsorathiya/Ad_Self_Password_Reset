@@ -939,3 +939,7 @@ button.method-card {
     border: 0;
 }
 .method-card-note { margin-top: var(--space-2); font-size: var(--font-size-sm); color: var(--color-text-muted); }
+
+/* Policy reasons under a refused new password (showPasswordError) */
+.form-error .policy-problems { margin: var(--space-1) 0 0; padding-left: 1.25rem; }
+.form-error .policy-problems li { margin-bottom: 2px; }

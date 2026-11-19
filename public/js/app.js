@@ -67,10 +67,12 @@ function setCachedUser(user) {
 // ---- API wrapper ----
 
 class ApiError extends Error {
-    constructor(message, status, code) {
+    constructor(message, status, code, data) {
         super(message);
         this.status = status;
         this.code = code;
+        // Extra detail some errors carry, e.g. { problems: [{ rule, message }] } for PASSWORD_POLICY
+        this.data = data || null;
     }
 }
 
@@ -141,7 +143,7 @@ async function api(method, url, body, { retry = true } = {}) {
     if (!res.ok || json.success === false) {
         const message = json.message
             || (res.status === 429 ? 'Too many attempts. Please wait and try again.' : 'Request failed. Please try again.');
-        throw new ApiError(message, res.status, json.code);
+        throw new ApiError(message, res.status, json.code, json.data);
     }
 
     return json;
@@ -270,6 +272,77 @@ function setFieldError(input, message) {
     }
 }
 
+/**
+ * A lead sentence plus one line per broken rule, under the field (one problem: just the sentence).
+ * @param {HTMLInputElement} input
+ * @param {string} lead
+ * @param {string[]} messages
+ */
+function showProblemList(input, lead, messages) {
+    setFieldError(input, lead);
+    const errorEl = input.closest('.form-group')?.querySelector('.form-error');
+    if (!errorEl || messages.length <= 1) return;
+    const list = document.createElement('ul');
+    list.className = 'policy-problems';
+    messages.forEach((message) => {
+        const item = document.createElement('li');
+        item.textContent = message;
+        list.appendChild(item);
+    });
+    errorEl.appendChild(list);
+}
+
+/**
+ * A new password refused by the server (PASSWORD_POLICY carries data.problems); any other error as a plain
+ * field error.
+ */
+function showPasswordError(input, err) {
+    const problems = err?.code === 'PASSWORD_POLICY' ? (err.data?.problems || []) : [];
+    showProblemList(input, err.message, problems.map((p) => p.message));
+}
+
+/**
+ * The same rules the server checks first (length, character types, username, name parts), worded the same way,
+ * so the page can say what is wrong before anything is sent. History and the minimum age only the server knows.
+ * @returns {string[]} empty = nothing found
+ */
+function passwordProblems(password, identity = {}) {
+    const problems = [];
+    const length = [...password].length;
+    if (length < passwordRules.minLength) {
+        problems.push(`Use at least ${passwordRules.minLength} characters (this one has ${length}).`);
+    }
+    if (!passwordRules.complexity) return problems;
+
+    const c = getPasswordChecks(password, identity);
+    const kinds = [['uppercase letters', c.upper], ['lowercase letters', c.lower], ['numbers', c.digit], ['symbols', c.symbol]]
+        .filter(([, present]) => present).map(([name]) => name);
+    if (kinds.length < 3) {
+        const found = kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds[kinds.length - 1]}` : kinds[0];
+        problems.push(`Use at least 3 of these: uppercase letters, lowercase letters, numbers, symbols (it has ${found ? `only ${found}` : 'none of them'}).`);
+    }
+    const lower = password.toLowerCase();
+    const name = String(identity.username || '');
+    const hasUsername = name.length >= 3 && lower.includes(name.toLowerCase());
+    if (hasUsername) problems.push(`It must not contain your username (${name}).`);
+    const parts = String(identity.displayName || '').split(/[,.\-_#\t ]+/)
+        .filter((part) => part.length >= 3 && lower.includes(part.toLowerCase()))
+        .filter((part) => !(hasUsername && name.toLowerCase().includes(part.toLowerCase())));
+    if (parts.length) problems.push(`It must not contain ${parts.length === 1 ? 'a part' : 'parts'} of your name (${parts.join(', ')}).`);
+    return problems;
+}
+
+/** Shows passwordProblems() under the field; returns true when the password may be sent. */
+function checkNewPassword(input, identity) {
+    const problems = passwordProblems(input.value, identity);
+    if (!problems.length) return true;
+    const lead = problems.length === 1
+        ? `The new password does not meet the domain password policy: ${problems[0]}`
+        : 'The new password does not meet the domain password policy. Please fix the points below.';
+    showProblemList(input, lead, problems);
+    return false;
+}
+
 // Sign-in and reset take the domain username only, not an email address or DOMAIN\user
 function usernameFormatError(username) {
     if (username.includes('@')) {
@@ -350,6 +423,21 @@ function renderLengthRule(reqList) {
     if (item) item.textContent = `At least ${passwordRules.minLength} characters`;
 }
 
+// Rules the page cannot check while typing (AD remembers old passwords; the minimum age depends on the last change)
+function renderPolicyNotes() {
+    const history = Number(passwordRules.historyCount) || 0;
+    const minAge = Number(passwordRules.minAgeDays) || 0;
+    document.querySelectorAll('[data-policy-note="history"]').forEach((el) => {
+        el.textContent = history ? `Your last ${history} passwords cannot be used again.` : '';
+        el.classList.toggle('hidden', !history);
+    });
+    document.querySelectorAll('[data-policy-note="min-age"]').forEach((el) => {
+        const days = Number.isInteger(minAge) ? minAge : minAge.toFixed(1);
+        el.textContent = minAge ? `After a change, the next change is possible after ${days} day${days === 1 ? '' : 's'}.` : '';
+        el.classList.toggle('hidden', !minAge);
+    });
+}
+
 function evaluatePasswordStrength(password) {
     if (!password) return { level: '', label: '' };
     const c = getPasswordChecks(password);
@@ -383,6 +471,7 @@ function bindPasswordStrength(input, meterRoot, reqList, identity = () => ({})) 
     input.addEventListener('input', update);
     loadPasswordRules().then(() => {
         renderLengthRule(reqList);
+        renderPolicyNotes();
         // The complexity items only matter when the domain enforces them
         reqList?.querySelectorAll('[data-req="lower"], [data-req="upper"], [data-req="digit"], [data-req="symbol"]')
             .forEach((li) => li.classList.toggle('hidden', !passwordRules.complexity));

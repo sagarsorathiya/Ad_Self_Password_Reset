@@ -33,6 +33,14 @@ function checkPolicy(record, newPassword) {
     }
 }
 
+// AD FILETIME (100-ns units since 1601) for a JS date, as stored in pwdLastSet
+function toFileTime(date = new Date()) {
+    return String((BigInt(date.getTime()) + 11644473600000n) * 10000n);
+}
+
+// Domain password policy as AD stores it on the domain root (minPwdAge: negative 100-ns units)
+const DEFAULT_POLICY = { minPwdLength: '8', pwdProperties: '1', pwdHistoryLength: String(PASSWORD_HISTORY), minPwdAge: '0' };
+
 function isAdmin(user) {
     if (!user.memberOf) return false;
     const groups = Array.isArray(user.memberOf) ? user.memberOf : [user.memberOf];
@@ -58,6 +66,7 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
     function reset() {
         unavailable = false;
         protectedResetRefused = false;
+        policy = { ...DEFAULT_POLICY };
         calls.findUser = 0;
         directory = new Map();
         for (const seed of SEED_USERS) {
@@ -133,7 +142,7 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         }
         checkPolicy(record, newPassword);
         record.password = newPassword;
-        record.entry.pwdLastSet = String(Date.now());
+        record.entry.pwdLastSet = toFileTime();
         record.history = [newPassword, ...record.history].slice(0, PASSWORD_HISTORY);
         record.entry.passwordExpiresAt = new Date(Date.now() + MAX_PASSWORD_AGE_MS);
     }
@@ -143,9 +152,15 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         ensureAvailable();
         const record = findRecordByDn(userDN);
         if (!record || record.password !== oldPassword) throw new Error('Invalid credentials');
+        // Minimum password age applies to a change by the user (not to an admin reset)
+        const minAgeMs = Math.abs(Number(policy.minPwdAge)) / 10000;
+        const lastSetMs = Number(BigInt(record.entry.pwdLastSet || '0') / 10000n) - 11644473600000;
+        if (minAgeMs > 0 && Date.now() - lastSetMs < minAgeMs) {
+            throw new Error('Password does not meet the domain password policy requirements');
+        }
         checkPolicy(record, newPassword);
         record.password = newPassword;
-        record.entry.pwdLastSet = String(Date.now());
+        record.entry.pwdLastSet = toFileTime();
         record.history = [newPassword, ...record.history].slice(0, PASSWORD_HISTORY);
         record.entry.passwordExpiresAt = new Date(Date.now() + MAX_PASSWORD_AGE_MS);
     }
@@ -190,6 +205,13 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
 
     // Real AD refuses a service-account reset of an adminCount=1 account; tests switch this on to see it
     let protectedResetRefused = false;
+    // Domain policy (tests change it with setPasswordPolicy; reset() restores it)
+    let policy = { ...DEFAULT_POLICY };
+
+    async function getDomainPasswordPolicy() {
+        ensureAvailable();
+        return { ...policy };
+    }
 
     reset();
 
@@ -201,6 +223,10 @@ function createMockDirectory({ name, searchBase, secondary = false }) {
         changePassword,
         changePasswordWithOld,
         unlockAccount,
+        getDomainPasswordPolicy,
+        // No fine-grained policies in the mock: the domain policy always applies
+        getResultantPasswordPolicy: async () => null,
+        setPasswordPolicy: (overrides) => { policy = { ...policy, ...overrides }; },
         listSignInAccounts,
         listPasswordExpiries,
         setProtectedResetRefused: (value) => { protectedResetRefused = Boolean(value); },

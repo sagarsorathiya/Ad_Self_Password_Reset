@@ -14,6 +14,7 @@ const passwordSyncService = require('../services/passwordSyncService');
 const notificationService = require('../services/notificationService');
 const sessionService = require('../services/sessionService');
 const { isLockedOut: isAdLockedOut, resetBlockedForProtected } = require('../services/adPassword');
+const passwordPolicyService = require('../services/passwordPolicyService');
 const { logAudit } = require('./authController');
 
 const INCORRECT_ANSWERS_MESSAGE = 'One or more answers are incorrect. Please try again.';
@@ -46,11 +47,21 @@ async function decoyQuestions(username) {
 
 /**
  * GET /api/password/rules
- * The rules the change and reset pages show and check before AD is asked.
+ * The rules the change and reset pages show and check before AD is asked: the admin settings, tightened by the
+ * domain policy when it can be read (a fine-grained policy for one user is applied at submit time).
  */
-function getRules(req, res) {
+async function getRules(req, res) {
     const { passwordMinLength, passwordComplexity } = settingsService.current().security;
-    res.json({ success: true, data: { minLength: passwordMinLength, complexity: passwordComplexity } });
+    const domain = await passwordPolicyService.domainRules();
+    res.json({
+        success: true,
+        data: {
+            minLength: Math.max(passwordMinLength, domain?.minLength || 0),
+            complexity: domain ? domain.complexity : passwordComplexity,
+            historyCount: domain?.historyLength || 0,
+            minAgeDays: domain?.minAgeDays || 0,
+        },
+    });
 }
 
 // Shared checks for a new password; returns an error message or null
@@ -111,11 +122,31 @@ async function changePassword(req, res) {
             return res.status(404).json({ success: false, message: 'Your account was not found in Active Directory.' });
         }
 
+        // Say exactly which rule fails, instead of AD's single "does not meet the policy"
+        const policy = await passwordPolicyService.forUser(adUser);
+        const problems = passwordPolicyService.checkAgainstPolicy(newPassword, policy, {
+            username: adUser.sAMAccountName, displayName: adUser.displayName,
+        });
+        if (problems.length) {
+            await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, false,
+                `Policy check: ${problems.map((p) => p.rule).join(', ')}`);
+            return policyResponse(res, problems);
+        }
+
         // Nothing is written unless the second domain (if configured) is reachable
         const syncPlan = await passwordSyncService.prepare(req.user.username);
 
         // Change password in AD (verifies current password first)
-        await ldapService.changePasswordWithOld(adUser.dn, currentPassword, newPassword);
+        try {
+            await ldapService.changePasswordWithOld(adUser.dn, currentPassword, newPassword);
+        } catch (err) {
+            if (!isPolicyError(err)) throw err;
+            // Passed the rules above, so AD refused it for a rule only it can check: minimum age or history
+            const reasons = passwordPolicyService.explainRejection({ policy, mode: 'change', pwdLastSet: adUser.pwdLastSet });
+            await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, false,
+                `${err.message}${reasons.length ? ` (likely: ${reasons.map((r) => r.rule).join(', ')})` : ''}`);
+            return policyResponse(res, reasons);
+        }
 
         await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, true);
         await revokeSessions(req.user.userId);
@@ -817,6 +848,25 @@ async function setPassword(req, res) {
             return fail(503, unavailableMessage(err), err.message);
         }
 
+        const adUser = await ldapService.findUser(decoded.username);
+        if (!adUser) {
+            return res.status(400).json({
+                success: false,
+                message: 'User not found in Active Directory.',
+            });
+        }
+
+        // Which rule fails, checked before the token is claimed so the user can simply try another password
+        const policy = await passwordPolicyService.forUser(adUser);
+        const problems = passwordPolicyService.checkAgainstPolicy(newPassword, policy, {
+            username: adUser.sAMAccountName, displayName: adUser.displayName,
+        });
+        if (problems.length) {
+            await logAudit(decoded.userId, decoded.username, 'password_reset', method, req, false,
+                `Policy check: ${problems.map((p) => p.rule).join(', ')}`);
+            return policyResponse(res, problems);
+        }
+
         // Claim the token atomically so concurrent requests cannot both use it
         const claim = await db.query(
             `INSERT INTO used_reset_tokens (token_jti, user_id, expires_at) VALUES ($1, $2, $3)
@@ -832,15 +882,6 @@ async function setPassword(req, res) {
         }
 
         const releaseClaim = () => db.query('DELETE FROM used_reset_tokens WHERE token_jti = $1', [decoded.jti]);
-
-        const adUser = await ldapService.findUser(decoded.username);
-        if (!adUser) {
-            await releaseClaim();
-            return res.status(400).json({
-                success: false,
-                message: 'User not found in Active Directory.',
-            });
-        }
 
         // The account may have changed in the minutes since verification
         if ((parseInt(adUser.userAccountControl, 10) & UAC_ACCOUNT_DISABLED) !== 0) {
@@ -858,6 +899,13 @@ async function setPassword(req, res) {
         } catch (err) {
             // Let the user retry with a different password while the token is still valid
             await releaseClaim();
+            if (isPolicyError(err)) {
+                // Passed the portal's checks, so AD refused it for history (the minimum age does not apply to a reset)
+                const reasons = passwordPolicyService.explainRejection({ policy, mode: 'reset' });
+                await logAudit(decoded.userId, decoded.username, 'password_reset', method, req, false,
+                    `${err.message}${reasons.length ? ` (likely: ${reasons.map((r) => r.rule).join(', ')})` : ''}`);
+                return policyResponse(res, reasons);
+            }
             await logAudit(decoded.userId, decoded.username, 'password_reset', method, req, false, err.message);
             throw err;
         }
@@ -921,6 +969,19 @@ function isPolicyError(err) {
 function policyErrorMessage() {
     return 'Password does not meet the domain password policy. Use the required length and character types, '
         + 'do not reuse a recent password, and note that a password cannot be changed again too soon after the last change.';
+}
+
+/**
+ * 400 PASSWORD_POLICY with the specific reasons in data.problems (the page lists them under the field).
+ * Without a specific reason (policy unreadable) the general wording is used, as before.
+ */
+function policyResponse(res, problems) {
+    return res.status(400).json({
+        success: false,
+        code: 'PASSWORD_POLICY',
+        message: problems.length ? passwordPolicyService.summarize(problems) : policyErrorMessage(),
+        data: { problems },
+    });
 }
 
 function logHintsProblem(err) {

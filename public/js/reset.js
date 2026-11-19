@@ -408,8 +408,8 @@
         clearFieldErrors(pwForm);
 
         let valid = true;
-        if (!meetsComplexity(newPw.value, { username: state.username })) {
-            setFieldError(newPw, 'Password does not meet the complexity requirements.');
+        if (!checkNewPassword(newPw, { username: state.username })) {
+            // checkNewPassword() listed exactly which rules fail
             valid = false;
         }
         if (confirmPw.value !== newPw.value) {
@@ -434,7 +434,7 @@
             pwForm.reset();
             show('stepDone', 5);
         } catch (err) {
-            setFieldError(newPw, err.message);
+            showPasswordError(newPw, err);
         } finally {
             setButtonLoading(pwBtn, false);
         }

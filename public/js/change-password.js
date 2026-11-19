@@ -25,8 +25,8 @@
             setFieldError(current, 'Current password is required.');
             valid = false;
         }
-        if (!meetsComplexity(next.value, identity())) {
-            setFieldError(next, 'Password does not meet the complexity requirements.');
+        if (!checkNewPassword(next, identity())) {
+            // checkNewPassword() listed exactly which rules fail
             valid = false;
         } else if (next.value === current.value) {
             setFieldError(next, 'New password must be different from your current password.');
@@ -60,6 +60,10 @@
         } catch (err) {
             if (err.status === 401 && err.code !== 'SESSION_EXPIRED') {
                 setFieldError(current, err.message);
+            } else if (err.code === 'PASSWORD_POLICY') {
+                // Which rule failed, listed under the new password
+                showPasswordError(next, err);
+                next.focus();
             } else {
                 showToast(err.message, 'error');
             }
