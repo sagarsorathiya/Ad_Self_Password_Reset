@@ -124,7 +124,13 @@ async function issue({ userId, purpose, number, maskedNumber }) {
 
     // The gateway's own answer travels back so the caller can put it in the audit log: it carries the
     // provider's message id, which is the only thing that lets you trace "I never got the code" with them.
-    return { expiresAt, resendAfter: RESEND_COOLDOWN_SECONDS, gateway: gateway?.response || '' };
+    // retriedAfter: the first attempt failed (e.g. "HTTP 503") and the automatic retry delivered it
+    return {
+        expiresAt,
+        resendAfter: RESEND_COOLDOWN_SECONDS,
+        gateway: gateway?.response || '',
+        retriedAfter: gateway?.retriedAfter || '',
+    };
 }
 
 /**
@@ -170,8 +176,9 @@ async function verify({ userId, purpose, code }) {
  * @param {string} maskedNumber
  * @param {string} gateway - `gateway` from issue()
  */
-function sentDetail(maskedNumber, gateway) {
-    return `Code sent to ${maskedNumber}${gateway ? ` - gateway: ${gateway}` : ''}`;
+function sentDetail(maskedNumber, gateway, retriedAfter = '') {
+    const retry = retriedAfter ? ` (second attempt; first failed: ${retriedAfter})` : '';
+    return `Code sent to ${maskedNumber}${retry}${gateway ? ` - gateway: ${gateway}` : ''}`;
 }
 
 function codeErrorMessage(reason) {

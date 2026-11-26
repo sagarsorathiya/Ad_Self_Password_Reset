@@ -19,6 +19,25 @@ const REQUEST_TIMEOUT_MS = 15000;
 const MAX_RESPONSE_CHARS = 300;
 
 let sender = null;
+// Pause before the single retry of a temporary failure (tests set it to 0)
+let retryDelayMs = 2000;
+
+/**
+ * A failed gateway call. temporary = the provider is down or overloaded (5xx, 429, no connection, timeout):
+ * worth telling the user to try again later. retrySafe = the provider certainly did not send the text
+ * (502/503 or a connection that never opened), so one automatic retry cannot deliver the code twice.
+ */
+class SmsGatewayError extends Error {
+    constructor(message, { status = null, temporary = false, retrySafe = false } = {}) {
+        super(message);
+        this.name = 'SmsGatewayError';
+        this.status = status;
+        this.temporary = temporary;
+        this.retrySafe = retrySafe;
+    }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function smsSettings() {
     return settingsService.current().sms;
@@ -105,29 +124,65 @@ async function send({ to, text }) {
         }
     }
 
-    if (sender) return sender({ url, method: settings.method, headers, body, to, text });
+    const request = { url, method: settings.method, headers, body, to, text };
+    try {
+        return await attempt(request, settings);
+    } catch (err) {
+        // One retry, and only when the provider certainly did not send the first text
+        if (!err.retrySafe) throw err;
+        await sleep(retryDelayMs);
+        try {
+            const result = await attempt(request, settings);
+            return { ...result, retriedAfter: shortReason(err) };
+        } catch (second) {
+            second.message = `${second.message} (retried once after: ${shortReason(err)})`;
+            throw second;
+        }
+    }
+}
+
+// "HTTP 503" or "no connection": what the audit row says about the first, failed attempt
+function shortReason(err) {
+    return err.status ? `HTTP ${err.status}` : 'no connection';
+}
+
+async function attempt(request, settings) {
+    if (sender) return sender(request);
 
     let response;
     try {
-        response = await fetch(url, {
-            method: settings.method,
-            headers,
-            body,
+        response = await fetch(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         });
     } catch (err) {
-        // A DNS name or timeout is safe to show an admin; it never contains the message or the code
-        throw new Error(`SMS gateway unreachable: ${err.message}`);
+        // A timeout may still have reached the provider, so it is temporary but never retried;
+        // a refused or failed connection never did. A DNS name or timeout is safe to show an admin.
+        const timedOut = err.name === 'TimeoutError' || err.name === 'AbortError';
+        throw new SmsGatewayError(`SMS gateway unreachable: ${err.message}`, { temporary: true, retrySafe: !timedOut });
     }
 
     const answer = (await response.text().catch(() => '')).trim().slice(0, MAX_RESPONSE_CHARS);
     if (!response.ok) {
-        throw new Error(`SMS gateway returned HTTP ${response.status}${answer ? `: ${answer}` : ''}`);
+        const status = response.status;
+        throw new SmsGatewayError(`SMS gateway returned HTTP ${status}${answer ? `: ${answer}` : ''}`, {
+            status,
+            temporary: status >= 500 || status === 429,
+            // 502/503: a proxy in front of the provider answered, nothing was sent. 500/504 may have been.
+            retrySafe: status === 502 || status === 503,
+        });
     }
     if (settings.successText && !answer.includes(settings.successText)) {
-        throw new Error(`SMS gateway did not confirm delivery: ${answer || '(empty response)'}`);
+        throw new SmsGatewayError(`SMS gateway did not confirm delivery: ${answer || '(empty response)'}`);
     }
     return { response: answer };
+}
+
+/** True when the provider is down or overloaded, so "try again in a few minutes" is the right advice. */
+function isTemporaryFailure(err) {
+    return Boolean(err && err.temporary);
 }
 
 /**
@@ -158,7 +213,11 @@ module.exports = {
     describeGateway,
     render,
     parseHeaders,
+    isTemporaryFailure,
+    SmsGatewayError,
     timeoutMs: REQUEST_TIMEOUT_MS,
-    // Tests only: replace the HTTP call with a stub (request) => any
+    // Tests only: replace the HTTP call with a stub (request) => any. A stub that throws an SmsGatewayError
+    // goes through the same retry rules as a real call.
     setSender: (stub) => { sender = stub; },
+    setRetryDelay: (ms) => { retryDelayMs = ms; },
 };

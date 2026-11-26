@@ -730,6 +730,11 @@
                 setFieldError(document.getElementById('smsCurrentPassword'), err.message);
                 return false;
             }
+            if (err.code === 'SMS_UNAVAILABLE') {
+                // The provider is down, not the user's number: a longer, calmer message
+                showToast(err.message, 'warning', 12000);
+                return false;
+            }
             showToast(err.message, 'error');
             return false;
         }

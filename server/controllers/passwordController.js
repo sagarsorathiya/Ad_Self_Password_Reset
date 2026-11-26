@@ -8,6 +8,7 @@ const db = require('../config/db');
 const ldapService = require('../services/ldapService');
 const totpService = require('../services/totpService');
 const smsOtpService = require('../services/smsOtpService');
+const smsService = require('../services/smsService');
 const mobileService = require('../services/mobileService');
 const passwordExceptionService = require('../services/passwordExceptionService');
 const passwordSyncService = require('../services/passwordSyncService');
@@ -667,14 +668,14 @@ async function sendResetSMS(req, res) {
         if (!mobile?.number) return decoy();
 
         const masked = mobileService.mask(mobile.number);
-        const { resendAfter, gateway } = await smsOtpService.issue({
+        const { resendAfter, gateway, retriedAfter } = await smsOtpService.issue({
             userId: dbUser.id,
             purpose: 'reset',
             number: mobile.number,
             maskedNumber: masked,
         });
         await logAudit(dbUser.id, dbUser.username, 'password_reset_sms', 'sms', req, true,
-            smsOtpService.sentDetail(masked, gateway));
+            smsOtpService.sentDetail(masked, gateway, retriedAfter));
 
         res.json({
             success: true,
@@ -693,6 +694,19 @@ async function sendResetSMS(req, res) {
             return smsLimitResponse(err, dbUser, req, res);
         }
         console.error('[Password] Send reset SMS error:', err.message);
+        // A gateway failure is audited like enrolment's, so "the code never came" can be traced
+        if (dbUser && err instanceof smsService.SmsGatewayError) {
+            await logAudit(dbUser.id, dbUser.username, 'password_reset_sms', 'sms', req, false, `Code not sent: ${err.message}`)
+                .catch(() => {});
+        }
+        if (smsService.isTemporaryFailure(err)) {
+            return res.status(503).json({
+                success: false,
+                code: 'SMS_UNAVAILABLE',
+                message: 'The text message service is not responding right now, so no code was sent. '
+                    + 'Please try again in a few minutes, or go back and choose another method if you set one up.',
+            });
+        }
         res.status(502).json({
             success: false,
             message: 'We could not send the text message. Please try another method or contact your administrator.',

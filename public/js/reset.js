@@ -322,6 +322,10 @@
             if (err.code === 'SMS_COOLDOWN') {
                 startSmsCountdown(err.data?.resendAfter || 60);
                 showToast(err.message, 'warning');
+            } else if (err.code === 'SMS_UNAVAILABLE') {
+                // The provider is down: say so where the "we sent a code" line would be, and keep Resend usable
+                document.getElementById('smsSentTo').textContent = 'No code was sent: the text message service is not responding.';
+                showToast(err.message, 'warning', 12000);
             } else {
                 showToast(err.message, 'error');
             }

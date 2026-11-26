@@ -3,6 +3,7 @@ const db = require('../config/db');
 const settingsService = require('../services/settingsService');
 const totpService = require('../services/totpService');
 const smsOtpService = require('../services/smsOtpService');
+const smsService = require('../services/smsService');
 const mobileService = require('../services/mobileService');
 const ldapService = require('../services/ldapService');
 const cryptoService = require('../services/cryptoService');
@@ -448,7 +449,7 @@ async function setupSMS(req, res) {
             [mobileService.encrypt(target.number), target.source, req.user.userId]
         );
 
-        const { resendAfter, gateway } = await smsOtpService.issue({
+        const { resendAfter, gateway, retriedAfter } = await smsOtpService.issue({
             userId: req.user.userId,
             purpose: 'enrollment',
             number: target.number,
@@ -458,7 +459,7 @@ async function setupSMS(req, res) {
         // Audited on the way out, not only when it fails: an enrolment that goes quiet is the common
         // support call, and without this row there is nothing to show a code was ever sent.
         await logAudit(req.user.userId, req.user.username, 'enrollment_sms', 'sms', req, true,
-            smsOtpService.sentDetail(masked, gateway));
+            smsOtpService.sentDetail(masked, gateway, retriedAfter));
 
         res.json({
             success: true,
@@ -484,6 +485,17 @@ async function setupSMS(req, res) {
         }
         console.error('[Enrollment] SMS setup error:', err.message);
         await logAudit(req.user.userId, req.user.username, 'enrollment_sms', 'sms', req, false, `Code not sent: ${err.message}`);
+        if (smsService.isTemporaryFailure(err)) {
+            // The provider is down or overloaded: say so, and point at the other factor when it is on offer
+            const alternative = settingsService.current().factors?.totp
+                ? ', or go back and set up an authenticator app instead'
+                : '';
+            return res.status(503).json({
+                success: false,
+                code: 'SMS_UNAVAILABLE',
+                message: `The text message service is not responding right now, so no code was sent. Please try again in a few minutes${alternative}.`,
+            });
+        }
         res.status(502).json({
             success: false,
             message: 'We could not send the text message. Please try again, or contact your administrator.',
