@@ -14,13 +14,18 @@
     initPasswordToggles();
     // AD refuses a password containing the account name or a part of the display name
     const identity = () => ({ username: user.username, displayName: user.displayName });
-    bindPasswordStrength(next, document.getElementById('strength'), document.getElementById('reqList'), identity);
+    const reqList = document.getElementById('reqList');
+    const matchList = document.getElementById('matchList');
+    bindPasswordStrength(next, document.getElementById('strength'), reqList, identity);
+    bindMatchRule(next, confirm, matchList);
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         clearFieldErrors(form);
 
         let valid = true;
+        markPasswordAttempt(reqList);
+        markPasswordAttempt(matchList);
         if (!current.value) {
             setFieldError(current, 'Current password is required.');
             valid = false;

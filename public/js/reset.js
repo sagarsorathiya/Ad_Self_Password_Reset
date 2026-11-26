@@ -9,18 +9,25 @@
     };
     let countdownTimer = null;
     let smsResendTimer = null;
+    const LOW_TIME_MS = 2 * 60 * 1000;
 
     initPasswordToggles();
+    const reqList = document.getElementById('reqList');
+    const matchList = document.getElementById('matchList');
     bindPasswordStrength(
         document.getElementById('newPassword'),
         document.getElementById('strength'),
-        document.getElementById('reqList'),
+        reqList,
         () => ({ username: state.username })
     );
+    // "Matches the new password" sits under the confirmation field, so it gets its own list
+    bindMatchRule(document.getElementById('newPassword'), document.getElementById('confirmPassword'), matchList);
 
     // Coming from the sign-in page after "password expired": the username is already known
     const prefill = new URLSearchParams(window.location.search).get('username');
     if (prefill) document.getElementById('username').value = prefill.slice(0, 256);
+    applyDomainPrefix(document.getElementById('username'));
+    bindUsernameHint(document.getElementById('username'), document.getElementById('usernameHint'));
 
     document.querySelectorAll('[data-back]').forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -55,7 +62,7 @@
         e.preventDefault();
         clearFieldErrors(userForm);
 
-        const username = usernameInput.value.trim();
+        const username = stripDomainPrefix(usernameInput.value.trim());
         if (!username) {
             setFieldError(usernameInput, 'Username is required.');
             return;
@@ -237,6 +244,13 @@
         }
     });
 
+    // The sixth digit submits the form, once per value (a refused code is not sent again until it changes)
+    function autoSubmit(form, input, button) {
+        if (input.value.length !== 6 || button.disabled || input.dataset.autoSent === input.value) return;
+        input.dataset.autoSent = input.value;
+        form.requestSubmit(button);
+    }
+
     // ---- Step 3b: TOTP ----
 
     const totpForm = document.getElementById('totpForm');
@@ -245,6 +259,7 @@
 
     totpInput.addEventListener('input', () => {
         totpInput.value = totpInput.value.replace(/\D/g, '').slice(0, 6);
+        autoSubmit(totpForm, totpInput, totpBtn);
     });
 
     totpForm.addEventListener('submit', async (e) => {
@@ -283,6 +298,7 @@
 
     smsInput.addEventListener('input', () => {
         smsInput.value = smsInput.value.replace(/\D/g, '').slice(0, 6);
+        autoSubmit(smsForm, smsInput, smsBtn);
     });
 
     // Opening the step sends the code; the section is shown either way, so a failed send does not
@@ -353,7 +369,7 @@
                 return;
             }
             smsResendBtn.disabled = true;
-            smsResendBtn.textContent = `Resend in ${left}s`;
+            smsResendBtn.textContent = `Resend in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
             left -= 1;
         };
         tick();
@@ -380,13 +396,24 @@
 
     function startCountdown() {
         const el = document.getElementById('countdown');
+        const chip = document.getElementById('countdownChip');
+        const announce = document.getElementById('countdownAnnounce');
         const expiresAt = Date.now() + RESET_TOKEN_TTL_MS;
+        let warned = false;
+        chip.classList.remove('low');
+        announce.textContent = '';
         clearInterval(countdownTimer);
         const tick = () => {
             const remaining = Math.max(0, expiresAt - Date.now());
             const m = Math.floor(remaining / 60000);
             const s = Math.floor((remaining % 60000) / 1000);
             el.textContent = `${m}:${String(s).padStart(2, '0')}`;
+            // Announced once, not every second
+            if (remaining <= LOW_TIME_MS && !warned) {
+                warned = true;
+                chip.classList.add('low');
+                announce.textContent = '2 minutes left to set your new password.';
+            }
             if (remaining === 0) {
                 clearInterval(countdownTimer);
                 state.resetToken = null;
@@ -408,6 +435,8 @@
         clearFieldErrors(pwForm);
 
         let valid = true;
+        markPasswordAttempt(reqList);
+        markPasswordAttempt(matchList);
         if (!checkNewPassword(newPw, { username: state.username })) {
             // checkNewPassword() listed exactly which rules fail
             valid = false;
@@ -428,10 +457,12 @@
             const syncWarning = document.getElementById('doneSyncWarning');
             syncWarning.textContent = res.data?.sync?.status === 'failed' ? res.message : '';
             syncWarning.classList.toggle('hidden', res.data?.sync?.status !== 'failed');
-            document.getElementById('doneUnlocked').classList.toggle('hidden', !res.data?.unlocked);
+            renderDoneList(document.getElementById('doneList'), res.data);
             state.resetToken = null;
             clearInterval(countdownTimer);
             pwForm.reset();
+            resetPasswordAttempt(reqList);
+            resetPasswordAttempt(matchList);
             show('stepDone', 5);
         } catch (err) {
             showPasswordError(newPw, err);

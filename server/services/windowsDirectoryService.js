@@ -78,6 +78,7 @@ function createWindowsDirectory(ad, escapeFilterValue) {
 
     async function findUser(username) {
         const { user } = await run({ op: 'findUser', filterValue: escapeFilterValue(username) });
+        if (user) user.passwordExpiresAt = fileTimeToDate(user.passwordExpiryTime);
         return user;
     }
 

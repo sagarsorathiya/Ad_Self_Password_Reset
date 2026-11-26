@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin — AD Password Portal</title>
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20261119">
+    <link rel="stylesheet" href="/css/styles.css?v=20261120b">
 </head>
 <body>
     <div class="app-container">
@@ -18,10 +18,10 @@
             </div>
 
             <div class="stats-grid fade-in">
-                <div class="stat-card"><div class="stat-value" id="statTotal">–</div><div class="stat-label">Total Users</div></div>
-                <div class="stat-card"><div class="stat-value" id="statEnrolled">–</div><div class="stat-label">Enrolled</div></div>
-                <div class="stat-card"><div class="stat-value" id="statPending">–</div><div class="stat-label">Pending Enrollment</div></div>
-                <div class="stat-card"><div class="stat-value" id="statLocked">–</div><div class="stat-label">Locked</div></div>
+                <button type="button" class="stat-card" data-filter="all" aria-pressed="true"><span class="stat-value" id="statTotal">–</span><span class="stat-label">Total Users</span></button>
+                <button type="button" class="stat-card" data-filter="enrolled" aria-pressed="false"><span class="stat-value" id="statEnrolled">–</span><span class="stat-label">Enrolled</span></button>
+                <button type="button" class="stat-card" data-filter="pending" aria-pressed="false"><span class="stat-value" id="statPending">–</span><span class="stat-label">Pending Enrollment</span></button>
+                <button type="button" class="stat-card" data-filter="locked" aria-pressed="false"><span class="stat-value" id="statLocked">–</span><span class="stat-label">Locked</span></button>
             </div>
 
             <div class="filter-tabs mb-6 inline-flex" role="tablist" id="mainTabs" aria-label="Administration sections">
@@ -52,6 +52,10 @@
                             <option value="created">Newest first</option>
                             <option value="activity">Recent activity first</option>
                         </select>
+                        <div class="filter-tabs density-toggle" role="group" aria-label="Row density">
+                            <button type="button" class="filter-tab" data-density="comfortable" aria-pressed="true">Comfortable</button>
+                            <button type="button" class="filter-tab" data-density="compact" aria-pressed="false">Compact</button>
+                        </div>
                         <button type="button" class="btn btn-primary btn-sm" id="addAdminBtn">+ Add Admin</button>
                     </div>
                 </div>
@@ -134,6 +138,10 @@
                         <input class="form-input w-auto" type="date" id="auditEnd" aria-label="End date">
                     </div>
                     <div class="toolbar-left">
+                        <div class="filter-tabs density-toggle" role="group" aria-label="Row density">
+                            <button type="button" class="filter-tab" data-density="comfortable" aria-pressed="true">Comfortable</button>
+                            <button type="button" class="filter-tab" data-density="compact" aria-pressed="false">Compact</button>
+                        </div>
                         <button type="reset" class="btn btn-ghost btn-sm">Clear</button>
                         <button type="submit" class="btn btn-primary btn-sm">Apply</button>
                     </div>
@@ -233,7 +241,8 @@
                 </p>
 
                 <form class="card card-full mb-6" id="policyForm" novalidate>
-                    <h2 class="settings-title">Password reset verification</h2>
+                    <h2 class="settings-title">Password reset verification <span class="protected-chip"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 11h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Protected</span></h2>
+                    <p class="protected-note">Changes here need a member of the directory admin group and that admin&#39;s Windows password.</p>
                     <div class="settings-grid">
                         <div class="form-group">
                             <label class="form-label" for="resetPolicy">What users must prove</label>
@@ -296,7 +305,8 @@
 
                 <form id="factorForm" novalidate>
                     <div class="card card-full mb-6">
-                        <h2 class="settings-title">Second factors</h2>
+                        <h2 class="settings-title">Second factors <span class="protected-chip"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 11h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Protected</span></h2>
+                        <p class="protected-note">Changes here need a member of the directory admin group and that admin&#39;s Windows password.</p>
                         <div class="settings-grid">
                             <div class="form-group">
                                 <label class="form-label" for="facTotp">Authenticator app (TOTP)</label>
@@ -320,7 +330,8 @@
                     </div>
 
                     <div class="card card-full mb-6">
-                        <h2 class="settings-title">SMS gateway</h2>
+                        <h2 class="settings-title">SMS gateway <span class="protected-chip"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 11h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Protected</span></h2>
+                        <p class="protected-note">The gateway address, method, headers and body template are protected; the other fields are not.</p>
                         <p class="text-sm text-muted mb-4">
                             Any gateway with an HTTP API works. In the URL, body and headers you can use
                             <code>{mobile}</code> (with +), <code>{mobile_plain}</code> (digits only),
@@ -562,7 +573,7 @@
         </main>
     </div>
 
-    <script src="/js/app.js?v=20261119"></script>
-    <script src="/js/admin.js?v=20261118"></script>
+    <script src="/js/app.js?v=20261120b"></script>
+    <script src="/js/admin.js?v=20261120"></script>
 </body>
 </html>

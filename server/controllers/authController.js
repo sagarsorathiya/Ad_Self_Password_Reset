@@ -332,6 +332,73 @@ async function me(req, res) {
     }
 }
 
+// Password expiry per user, cached: the second-domain helper starts PowerShell for every lookup
+const EXPIRY_CACHE_MS = 5 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const expiryCache = new Map();
+
+/**
+ * Password expiry of one user from the reminder source (first or second domain).
+ * @returns {Promise<{expiresAt: string|null, daysLeft: number|null, domain: string, neverExpires: boolean}|null>}
+ *   null = the source is unreachable, or the user does not exist there
+ */
+async function passwordExpiryFor(username) {
+    const fromSecondary = settingsService.current().reminders?.source === 'secondary' && ldapService.secondary;
+    const source = fromSecondary ? ldapService.secondary : ldapService;
+    const key = `${fromSecondary ? 2 : 1}:${String(username).toLowerCase()}`;
+    const cached = expiryCache.get(key);
+    let expiresAt;
+    if (cached && cached.at > Date.now() - EXPIRY_CACHE_MS) {
+        ({ expiresAt } = cached);
+    } else {
+        const adUser = await source.findUser(username);
+        if (!adUser) return null;
+        expiresAt = adUser.passwordExpiresAt || null;
+        if (expiryCache.size > 5000) expiryCache.clear();
+        expiryCache.set(key, { at: Date.now(), expiresAt });
+    }
+    const domain = fromSecondary ? ldapService.secondary.name : config.ad.name;
+    if (!expiresAt) return { expiresAt: null, daysLeft: null, domain, neverExpires: true };
+    return {
+        expiresAt: new Date(expiresAt).toISOString(),
+        daysLeft: Math.max(0, Math.ceil((new Date(expiresAt) - Date.now()) / DAY_MS)),
+        domain,
+        neverExpires: false,
+    };
+}
+
+/**
+ * GET /api/auth/account-status
+ * What the dashboard shows above the recovery methods: password expiry, reset policy, enabled factors.
+ * A directory failure never fails the request; the expiry is then null and the page leaves it out.
+ */
+async function accountStatus(req, res) {
+    let passwordExpiry = null;
+    try {
+        passwordExpiry = await passwordExpiryFor(req.user.username);
+    } catch (err) {
+        console.error('[Auth] Account status expiry lookup failed:', err.message);
+    }
+    const { factors } = settingsService.current();
+    res.json({
+        success: true,
+        data: {
+            passwordExpiry,
+            resetPolicy: settingsService.resetPolicy(),
+            factors: { totp: Boolean(factors?.totp), sms: Boolean(factors?.sms) },
+            domain: config.ad.name,
+        },
+    });
+}
+
+/**
+ * GET /api/auth/sign-in-info (public)
+ * The domain shown before the username field; empty when AD_SIGNIN_DOMAIN=none.
+ */
+function signInInfo(req, res) {
+    res.json({ success: true, data: { domainPrefix: config.ad.signInDomain || null } });
+}
+
 /**
  * POST /api/auth/logout
  * Ends the user's sessions on every device (token_version is per user).
@@ -402,4 +469,7 @@ async function logAudit(userId, username, action, method, req, success, details 
     }
 }
 
-module.exports = { login, refresh, reauth, me, logout, logAudit, getOrCreateUser };
+module.exports = {
+    login, refresh, reauth, me, accountStatus, signInInfo, logout, logAudit, getOrCreateUser,
+    _clearExpiryCache: () => expiryCache.clear(),
+};

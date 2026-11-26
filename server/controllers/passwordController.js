@@ -163,7 +163,7 @@ async function changePassword(req, res) {
             message: sync?.status === 'failed'
                 ? syncFailureMessage(sync)
                 : 'Password changed successfully. Please log in with your new password.',
-            data: { sync: publicSyncResult(sync) },
+            data: { sync: publicSyncResult(sync), domain: config.ad.name },
         });
     } catch (err) {
         await logAudit(req.user.userId, req.user.username, 'password_change', 'authenticated', req, false, err.message);
@@ -938,7 +938,7 @@ async function setPassword(req, res) {
             message: sync?.status === 'failed'
                 ? syncFailureMessage(sync)
                 : 'Password reset successfully. You may now log in with your new password.',
-            data: { sync: publicSyncResult(sync), unlocked },
+            data: { sync: publicSyncResult(sync), unlocked, domain: config.ad.name },
         });
     } catch (err) {
         if (isPolicyError(err)) {

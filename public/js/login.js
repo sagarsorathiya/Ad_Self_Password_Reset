@@ -5,6 +5,18 @@
     const loginBtn = document.getElementById('loginBtn');
 
     initPasswordToggles();
+    applyDomainPrefix(usernameInput);
+    bindUsernameHint(usernameInput, document.getElementById('usernameHint'));
+
+    const expiredPanel = document.getElementById('expiredPanel');
+    document.getElementById('expiredBackBtn').addEventListener('click', () => {
+        expiredPanel.classList.add('hidden');
+        form.classList.remove('hidden');
+        document.getElementById('loginFooter').classList.remove('hidden');
+        usernameInput.value = '';
+        passwordInput.value = '';
+        usernameInput.focus();
+    });
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('expired')) {
@@ -32,7 +44,7 @@
         clearFieldErrors(form);
         hideAlert();
 
-        const username = usernameInput.value.trim();
+        const username = stripDomainPrefix(usernameInput.value.trim());
         const password = passwordInput.value;
         let valid = true;
 
@@ -56,22 +68,29 @@
             setCachedUser(data.user);
             goToLanding(data.user);
         } catch (err) {
-            showAlert(err.message);
-            if (err.code === 'PASSWORD_EXPIRED') {
-                // Signing in cannot work until the password is reset; go straight there with the name filled in
-                const link = document.createElement('a');
-                link.href = `/reset.html?username=${encodeURIComponent(username)}`;
-                link.textContent = ' Reset it now.';
-                document.getElementById('loginAlertText').appendChild(link);
-            }
             passwordInput.value = '';
-            passwordInput.focus();
             setButtonLoading(loginBtn, false);
+            if (err.code === 'PASSWORD_EXPIRED') {
+                // Signing in cannot work until the password is reset: one path there, with the name filled in
+                showExpiredPanel(username);
+                return;
+            }
+            showAlert(err.message);
+            passwordInput.focus();
         }
     });
 
     function goToLanding(user) {
         window.location.href = user.isEnrolled ? '/dashboard.html' : '/enroll.html';
+    }
+
+    function showExpiredPanel(username) {
+        document.getElementById('expiredUser').textContent = username;
+        document.getElementById('expiredResetLink').href = `/reset.html?username=${encodeURIComponent(username)}`;
+        form.classList.add('hidden');
+        document.getElementById('loginFooter').classList.add('hidden');
+        expiredPanel.classList.remove('hidden');
+        document.getElementById('expiredTitle').focus();
     }
 
     function showAlert(message) {

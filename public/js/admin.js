@@ -86,15 +86,49 @@
         loadUsers();
     }, 350));
 
+    // The filter tabs and the stat cards above the tabs select the same user filter
+    function applyUserFilter(filter) {
+        document.querySelectorAll('#userFilters .filter-tab').forEach((b) => {
+            b.classList.toggle('active', b.dataset.filter === filter);
+        });
+        document.querySelectorAll('.stats-grid .stat-card').forEach((card) => {
+            card.setAttribute('aria-pressed', String(card.dataset.filter === filter));
+        });
+        usersState.filter = filter;
+        usersState.page = 1;
+        loadUsers();
+    }
+
     document.querySelectorAll('#userFilters .filter-tab').forEach((btn) => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('#userFilters .filter-tab').forEach((b) => b.classList.remove('active'));
-            btn.classList.add('active');
-            usersState.filter = btn.dataset.filter;
-            usersState.page = 1;
-            loadUsers();
+        btn.addEventListener('click', () => applyUserFilter(btn.dataset.filter));
+    });
+
+    document.querySelectorAll('.stats-grid .stat-card').forEach((card) => {
+        card.addEventListener('click', () => {
+            switchTab('users');
+            applyUserFilter(card.dataset.filter);
         });
     });
+
+    // Row density for the users and audit tables, remembered in this browser
+    const DENSITY_KEY = 'sspr_admin_density';
+    function applyDensity(density) {
+        document.querySelectorAll('.data-table').forEach((t) => t.classList.toggle('density-compact', density === 'compact'));
+        document.querySelectorAll('.density-toggle .filter-tab').forEach((b) => {
+            const on = b.dataset.density === density;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', String(on));
+        });
+    }
+    document.querySelectorAll('.density-toggle .filter-tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            try { localStorage.setItem(DENSITY_KEY, btn.dataset.density); } catch { /* private mode */ }
+            applyDensity(btn.dataset.density);
+        });
+    });
+    let savedDensity = 'comfortable';
+    try { savedDensity = localStorage.getItem(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable'; } catch { /* private mode */ }
+    applyDensity(savedDensity);
 
     document.getElementById('userSort').addEventListener('change', (e) => {
         usersState.sort = e.target.value;

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sign In — AD Password Portal</title>
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20261119">
+    <link rel="stylesheet" href="/css/styles.css?v=20261120b">
 </head>
 <body>
     <div class="app-container">
@@ -44,7 +44,16 @@
                     <button type="submit" class="btn btn-primary btn-block btn-lg" id="loginBtn">Sign in</button>
                 </form>
 
-                <div class="auth-footer">
+                <section class="expired-panel hidden" id="expiredPanel" aria-labelledby="expiredTitle">
+                    <svg class="icon panel-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 11h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2z"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                    <h2 class="expired-panel-title" id="expiredTitle" tabindex="-1">Your password has expired</h2>
+                    <p class="expired-panel-text">The password for <strong id="expiredUser"></strong> is correct but no longer valid. Set a new one to sign in to Windows and this portal again.</p>
+                    <a href="/reset.html" class="btn btn-primary btn-block btn-lg" id="expiredResetLink">Reset my password</a>
+                    <button type="button" class="btn-link" id="expiredBackBtn">Sign in with another account</button>
+                    <p class="expired-panel-note">You verify with your security questions or a one-time code, then choose the new password. Your username is filled in for you.</p>
+                </section>
+
+                <div class="auth-footer" id="loginFooter">
                     Forgot your password? <a href="/reset.html">Reset it here</a>
                 </div>
             </div>
@@ -52,7 +61,7 @@
         </main>
     </div>
 
-    <script src="/js/app.js?v=20261119"></script>
-    <script src="/js/login.js?v=20261118"></script>
+    <script src="/js/app.js?v=20261120b"></script>
+    <script src="/js/login.js?v=20261120"></script>
 </body>
 </html>

@@ -5,73 +5,104 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard — AD Password Portal</title>
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20261119">
+    <link rel="stylesheet" href="/css/styles.css?v=20261120b">
 </head>
 <body>
     <div class="app-container">
         <nav id="navbar"></nav>
 
+        <!-- Shown until /api/auth/me answers, so a slow call does not leave an empty page -->
+        <div class="page-wrapper skeleton" id="loadingSkeleton" aria-busy="true" aria-label="Loading your account">
+            <div class="skeleton-row">
+                <div class="skeleton-card"><span class="skeleton-bar short"></span><span class="skeleton-bar long"></span></div>
+                <div class="skeleton-card"><span class="skeleton-bar short"></span><span class="skeleton-bar long"></span></div>
+            </div>
+            <div class="skeleton-card tall"><span class="skeleton-bar short"></span><span class="skeleton-bar long"></span><span class="skeleton-bar long"></span></div>
+        </div>
+
         <main class="page-wrapper hidden" id="content">
             <div class="section-header fade-in">
                 <h1 class="section-title" id="welcomeTitle">Welcome</h1>
-                <p class="section-subtitle">Manage your password and account recovery options.</p>
+                <p class="section-subtitle">Here is where your account stands.</p>
             </div>
 
-            <div class="dashboard-grid fade-in">
-                <section class="dashboard-card">
-                    <div class="dashboard-card-header">
-                        <h2 class="dashboard-card-title">Account Recovery</h2>
+            <section class="status-band fade-in" aria-label="Account status">
+                <div class="status-card" id="recoveryCard">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 3v6c0 4-3 7.5-7 9-4-1.5-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+                    <div class="status-card-body">
+                        <p class="status-card-kicker" id="recoveryKicker"></p>
+                        <p class="status-card-title" id="recoveryTitle"></p>
+                        <p class="status-card-text" id="recoveryText"></p>
                     </div>
-                    <ul class="status-list">
-                        <li class="status-item">
-                            <span>Security Questions</span>
-                            <span id="sqBadge" class="badge"></span>
+                    <a href="/enroll.html" class="btn btn-primary hidden" id="recoveryAction">Finish setup</a>
+                </div>
+                <div class="status-card tone-neutral hidden" id="expiryCard">
+                    <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0"/><path d="M12 7v5l3 2"/></svg>
+                    <div class="status-card-body">
+                        <p class="status-card-kicker" id="expiryKicker">Password expiry</p>
+                        <p class="status-card-title" id="expiryTitle"></p>
+                        <p class="status-card-text" id="expiryText"></p>
+                    </div>
+                    <a href="/change-password.html" class="btn btn-primary" id="expiryAction">Change now</a>
+                </div>
+            </section>
+
+            <div class="dashboard-layout fade-in">
+                <section class="dashboard-card dashboard-main" aria-labelledby="methodsTitle">
+                    <div class="dashboard-card-header">
+                        <h2 class="dashboard-card-title" id="methodsTitle">Recovery methods</h2>
+                        <span class="dashboard-card-note" id="methodsNote"></span>
+                    </div>
+                    <ul class="method-rows">
+                        <li class="method-row" id="row-questions">
+                            <div class="method-row-body">
+                                <span class="method-row-name">Security questions</span>
+                                <span class="method-row-detail">Answers only you know, stored as one-way hashes.</span>
+                            </div>
+                            <span class="badge" data-badge></span>
+                            <a href="/enroll.html" class="btn btn-secondary" data-action></a>
                         </li>
-                        <li class="status-item" id="totpRow">
-                            <span>Authenticator App (TOTP)</span>
-                            <span id="totpBadge" class="badge"></span>
+                        <li class="method-row hidden" id="row-totp">
+                            <div class="method-row-body">
+                                <span class="method-row-name">Authenticator app</span>
+                                <span class="method-row-detail">A 6-digit code from an app on your phone.</span>
+                            </div>
+                            <span class="badge" data-badge></span>
+                            <a href="/enroll.html" class="btn btn-secondary" data-action></a>
                         </li>
-                        <li class="status-item hidden" id="smsRow">
-                            <span>Text Message (SMS)</span>
-                            <span id="smsBadge" class="badge"></span>
-                        </li>
-                        <li class="status-item">
-                            <span>Overall Status</span>
-                            <span id="enrolledBadge" class="badge"></span>
+                        <li class="method-row hidden" id="row-sms">
+                            <div class="method-row-body">
+                                <span class="method-row-name">Text message</span>
+                                <span class="method-row-detail">A 6-digit code sent to your mobile number.</span>
+                            </div>
+                            <span class="badge" data-badge></span>
+                            <a href="/enroll.html" class="btn btn-secondary" data-action></a>
                         </li>
                     </ul>
-                    <a href="/enroll.html" class="btn btn-secondary btn-block mt-6">Manage Security Settings</a>
                 </section>
 
-                <section class="dashboard-card">
-                    <div class="dashboard-card-header">
-                        <h2 class="dashboard-card-title">Quick Actions</h2>
-                    </div>
-                    <div class="action-list">
-                        <a href="/change-password.html" class="btn btn-primary btn-block">Change my password</a>
-                        <a href="/admin.html" class="btn btn-secondary btn-block hidden" id="adminLink">Open administration</a>
-                    </div>
-                    <p class="text-sm text-muted mt-6">
-                        Forgot your password later? Use the <strong>Forgot Password</strong> link on the sign-in page
-                        and verify with your security questions or authenticator app.
-                    </p>
-                </section>
-
-                <section class="dashboard-card">
-                    <div class="dashboard-card-header">
-                        <h2 class="dashboard-card-title">Account</h2>
-                    </div>
-                    <ul class="status-list">
-                        <li class="status-item"><span>Username</span><strong id="infoUsername"></strong></li>
-                        <li class="status-item"><span>Display name</span><strong id="infoDisplayName"></strong></li>
-                        <li class="status-item"><span>Email</span><strong id="infoEmail"></strong></li>
-                    </ul>
-                </section>
+                <aside class="dashboard-side">
+                    <section class="dashboard-card" aria-labelledby="accountTitle">
+                        <div class="dashboard-card-header">
+                            <h2 class="dashboard-card-title" id="accountTitle">Account</h2>
+                        </div>
+                        <dl class="info-list">
+                            <dt>Username</dt><dd id="infoUsername"></dd>
+                            <dt>Display name</dt><dd id="infoDisplayName"></dd>
+                            <dt>Email</dt><dd id="infoEmail"></dd>
+                        </dl>
+                        <a href="/admin.html" class="btn btn-secondary btn-block mt-6 hidden" id="adminLink">Open administration</a>
+                    </section>
+                    <section class="dashboard-card help-card" aria-labelledby="helpTitle">
+                        <h2 class="dashboard-card-title mb-4" id="helpTitle">Forgot it later?</h2>
+                        <p class="text-sm" id="helpText">Use <strong>Forgot password</strong> on the sign-in page.</p>
+                    </section>
+                </aside>
             </div>
         </main>
     </div>
 
-    <script src="/js/app.js?v=20261119"></script>
-    <script src="/js/dashboard.js?v=20261118"></script>
+    <script src="/js/app.js?v=20261120b"></script>
+    <script src="/js/dashboard.js?v=20261120"></script>
 </body>
 </html>

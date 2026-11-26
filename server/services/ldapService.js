@@ -149,6 +149,7 @@ function createDirectory(ad) {
                         'dn', 'sAMAccountName', 'displayName', 'mail', 'mobile',
                         'userPrincipalName', 'memberOf', 'userAccountControl',
                         'pwdLastSet', 'lockoutTime', 'adminCount', 'msDS-User-Account-Control-Computed',
+                        'msDS-UserPasswordExpiryTimeComputed',
                     ],
                 };
 
@@ -162,6 +163,8 @@ function createDirectory(ad) {
 
                     res.on('searchEntry', (entry) => {
                         user = entryAttributes(entry);
+                        // null = no expiry date (no maximum age, never expires, or must change at next logon)
+                        user.passwordExpiresAt = fileTimeToDate(user['msDS-UserPasswordExpiryTimeComputed']);
                     });
 
                     res.on('error', (err) => {

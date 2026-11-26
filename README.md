@@ -31,9 +31,10 @@ An **intranet** web portal that lets Active Directory users change their passwor
 
 | Area | Details |
 |---|---|
-| Sign-in | AD credentials checked by an LDAP bind. JWT access token (15 min) plus refresh token (7 days); sessions end on sign-out, lock, password change or reset, and after 30 idle minutes. An expired password leads straight to Forgot password. |
+| Sign-in | AD credentials checked by an LDAP bind; the username field shows the domain in front (`DOMAIN\`, see `AD_SIGNIN_DOMAIN`). JWT access token (15 min) plus refresh token (7 days); sessions end on sign-out, lock, password change or reset, and after 30 idle minutes. An expired password replaces the form with one button to Forgot password. |
+| Home page | Account status first: whether self-service reset is ready and when the password expires (from the same domain as the reminders), then one row per recovery method with its own action. |
 | Enrollment | 2-5 security questions (default 3, answers hashed with bcrypt) plus a second factor: an authenticator app (QR code or manual key) and/or an SMS code. The user receives a mail whenever these settings change. |
-| Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes. What must be proved (questions and a code, either, or a code only) is an admin setting. A reset also clears an AD lockout. |
+| Forgot password | Username → choose a method → verify → set a new password with a single-use token valid for 10 minutes (shown as a timer). What must be proved (questions and a code, either, or a code only) is an admin setting. A reset also clears an AD lockout; the last page lists what changed. |
 | Change password | For signed-in users who have completed enrollment. A real user change in AD, so password history and minimum age apply (resets enforce history too). |
 | Second domain (optional) | Every change and reset also sets the same password in a second domain (same username), e.g. a separate mail domain. See §5.1. |
 | Mail (optional) | Security alert after every password change or reset (time, IP address, browser, method). Daily reminders before the password expires. See §5.2. |
@@ -110,6 +111,7 @@ All settings live in `.env`, which is git-ignored.
 | `AD_ADMIN_GROUP` | – | Full DN of the portal admin group |
 | `AD_TLS_REJECT_UNAUTHORIZED` | `true` | Only set `false` for testing. Trust your CA instead (see §14). |
 | `AD_DOMAIN_LABEL` | `Active Directory` | Name of the first domain in user messages (useful with a second domain) |
+| `AD_SIGNIN_DOMAIN` | first `DC=` of `AD_BASE_DN`, in capitals | Shown as `DOMAIN\` in front of the username on the sign-in and reset pages; `none` hides it |
 | `AD2_MODE` | `ldap` | Second domain (see §5.1): `ldap` = LDAPS/StartTLS with certificate checking; `windows` = Windows ADSI with Kerberos/NTLM sign-and-seal on port 389, no certificate (Windows servers only) |
 | `AD2_URL` | – | `ldap` mode: second domain URL. Empty (and no `AD2_SERVER`) = disabled. |
 | `AD2_SERVER` | – | `windows` mode: a **writable** DC of the second domain (hostname preferred, so Kerberos is used) |
@@ -421,11 +423,12 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
 
 ## 8. User guide
 
-1. **First sign-in:** open the portal and sign in with your domain username (just the username, not your email address or `DOMAIN\username`) and password. You're taken straight to enrollment.
+1. **First sign-in:** open the portal and sign in with your domain username and password. The domain is already shown in front of the field, so type just the username (typing `DOMAIN\username` also works; an email address does not). You're taken straight to enrollment.
 2. **Enroll:**
    - Step 1: pick 3 different questions and type answers (not case-sensitive).
    - Step 2: set up your one-time code. For an **authenticator app**, scan the QR code with Google Authenticator, Microsoft Authenticator or a compatible app (if none is installed, download one from the Google Play Store or the App Store), then type the 6-digit code. For **text messages**, confirm the mobile number shown (or type one, if we don't have yours) and enter the code we text you. If your organization offers both, pick whichever you prefer.
-3. **Forgot your password:** on the sign-in page click *Reset it here* and enter your username. With the default policy (`RESET_POLICY=both`), answer your security questions, **then** enter the 6-digit code from your authenticator app or the one we text you. Then choose a new password within 10 minutes. If you've lost your phone, contact the help desk; they can reset your enrollment.
+3. **Forgot your password:** on the sign-in page click *Reset it here* and enter your username. With the default policy (`RESET_POLICY=both`), answer your security questions, **then** enter the 6-digit code from your authenticator app or the one we text you (the sixth digit sends it; *Resend* becomes available after a short countdown). Then choose a new password before the timer next to the heading runs out (10 minutes). The last page lists what changed: the password, a second domain if there is one, an unlocked account. If you've lost your phone, contact the help desk; they can reset your enrollment.
+   - **Home page:** after signing in you see whether you can reset your password yourself, when it expires, and one button per recovery method (change answers, replace device, add or change a number).
 4. **Change password:** after signing in, go to *Change Password*. It appears only once you've finished enrollment (security questions and one one-time code method). You're signed out afterwards and sign in again with the new password.
 5. **Security Settings** (shown in the navigation bar once you've enrolled):
    - **Update questions or answers:** your current questions are pre-selected. Answers are stored as one-way hashes and can't be shown to anyone, so leave an answer blank to keep it, or type a new one.
@@ -434,13 +437,13 @@ Get-Content <install folder>\logs\portal.log -Tail 50 -Wait           # live log
    - Once you have finished enrollment, **any** change here asks for your current Windows password — including *adding* the second method you didn't set up originally. That is deliberate: it stops someone who gets hold of your signed-in browser from pointing password recovery at their own phone or authenticator.
 6. **Emails** (if your organization turned them on): after every password change or reset you get an email with the time, IP address and browser. If you didn't make the change, contact IT immediately. Before your password expires you get reminders (by default 14, 7, 3 and 1 days before). Change your password in the portal when you get one.
 7. **Password rules:** the page shows the domain's minimum length and (when the domain requires it) 3 of these 4: uppercase, lowercase, number, symbol. It can't contain your username or a part of your name. A recently used password is refused, and a password can't be changed again too soon after the last change if the domain sets a minimum password age. When a password is not accepted, the page says exactly why - for example *Use at least 12 characters (this one has 9)*, *it has only lowercase letters and numbers*, *It must not contain your username*, *It matches one of your last 24 passwords*, or *You can change it again from 20 Nov 2026, 10:05* - instead of a general "does not meet the policy".
-8. **Expired password or "must change at next logon":** signing in tells you so and links to Forgot password, with your username filled in. A reset also clears an AD lockout.
+8. **Expired password or "must change at next logon":** signing in shows *Your password has expired* with one *Reset my password* button, which opens Forgot password with your username filled in. A reset also clears an AD lockout.
 9. **Signed out?** The portal signs you out after 30 minutes without activity, and everywhere at once after a password change or reset, so a session someone else may have opened ends too.
 
 ## 9. Admin guide
 
 Members of `AD_ADMIN_GROUP` and portal admins see **Admin** in the navigation bar.
-- **Stats:** total, enrolled, pending and locked users (users appear once they've signed in for the first time).
+- **Stats:** total, enrolled, pending and locked users (users appear once they've signed in for the first time). Click a card to filter the user list. The users and audit tables keep their headers in view while scrolling and have a *Compact / Comfortable* row switch, remembered per browser. Cards whose changes need the admin group and your password are marked *Protected*.
 - **Users:** search and filter. **Lock** blocks sign-in and self-service reset and revokes the user's sessions; **Unlock** restores access. **Reset Enrollment** deletes their answers, authenticator and mobile number, which you'd use for a lost phone. They must enroll again at their next sign-in.
 - **Portal admins:** **+ Add Admin** grants admin rights by AD username (the account must exist and be enabled; it doesn't need to have signed in yet). **Make Admin** / **Remove Admin** on a user row does the same for existing users, and the *Portal Admins* filter lists them. Changes apply immediately, without signing in again, and are audited (*Admin granted*, *Admin removed*). You can't remove your own rights, and locking a portal admin also blocks their admin access. Members of `AD_ADMIN_GROUP` are always admins and can't be removed here.
 - **Audit Log:** filter by username (partial match), action and date range. Every sign-in, reset attempt, enrollment and admin action is recorded with IP and user agent, and so is every alert and reminder mail (*Password alert mail*, *Expiry reminder mail*), every mail/reminder settings change, test mail and manual reminder run, including failures. **Every one-time code that goes out is logged too** — *Setup code sent by SMS* during enrollment and *Reset code sent by SMS* during a reset — with the masked number it went to and the gateway's own reply, whether or not the send succeeded. That reply carries the provider's message id, which is what lets you trace a message the user says never arrived. Long entries are shortened to one line; click one to see the whole thing. **Retention** at the top of the tab deletes entries older than the chosen number of days (0 = keep forever).
@@ -496,6 +499,8 @@ All responses have the shape `{ success, data?, message? }`. Authenticated calls
 | POST | `/api/auth/login` | – | `{ username, password }` |
 | POST | `/api/auth/refresh` | – | `{ refreshToken }` |
 | GET | `/api/auth/me` | user | – |
+| GET | `/api/auth/account-status` | user | – → `{ passwordExpiry: { expiresAt, daysLeft, domain, neverExpires } \| null, resetPolicy, factors, domain }` (expiry from the reminder source; null when the directory is unreachable) |
+| GET | `/api/auth/sign-in-info` | – | – → `{ domainPrefix }` (`AD_SIGNIN_DOMAIN`) |
 | POST | `/api/auth/reauth` | user | `{ password }` → a new access token with a fresh sign-in time (first enrollment needs one from the last 15 minutes: 401 `RECENT_AUTH_REQUIRED`) |
 | POST | `/api/auth/logout` | user | – (ends the user's sessions on every device) |
 | GET | `/api/enrollment/questions` | user | – |

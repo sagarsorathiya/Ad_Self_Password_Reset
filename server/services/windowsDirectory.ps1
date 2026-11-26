@@ -35,7 +35,7 @@ try {
 
     switch ($req.op) {
         'findUser' {
-            $r = Find-One "(&(objectClass=user)(objectCategory=person)(sAMAccountName=$($req.filterValue)))" @('distinguishedName', 'sAMAccountName', 'userAccountControl', 'adminCount')
+            $r = Find-One "(&(objectClass=user)(objectCategory=person)(sAMAccountName=$($req.filterValue)))" @('distinguishedName', 'sAMAccountName', 'userAccountControl', 'adminCount', 'msDS-UserPasswordExpiryTimeComputed')
             $user = $null
             if ($r) {
                 $user = @{
@@ -43,6 +43,7 @@ try {
                     sAMAccountName = First $r 'samaccountname'
                     userAccountControl = First $r 'useraccountcontrol'
                     adminCount = First $r 'admincount'
+                    passwordExpiryTime = First $r 'msds-userpasswordexpirytimecomputed'
                 }
             }
             Write-Result @{ ok = $true; user = $user }

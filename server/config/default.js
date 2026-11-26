@@ -45,7 +45,16 @@ function buildAdConfig(prefix, defaultName) {
     };
 }
 
-const isAdEncrypted = (ad) => ad.url.startsWith('ldaps://') || (ad.startTls && ad.url.startsWith('ldap://'));
+function signInDomain(value, baseDN) {
+    if (value !== undefined && value.trim() !== '') {
+        const v = value.trim();
+        return v.toLowerCase() === 'none' ? '' : v.slice(0, 32);
+    }
+    const match = /(?:^|,)\s*DC=([^,]+)/i.exec(baseDN || '');
+    return match ? match[1].trim().toUpperCase().slice(0, 32) : '';
+}
+
+const isAdEncrypted =(ad) => ad.url.startsWith('ldaps://') || (ad.startTls && ad.url.startsWith('ldap://'));
 
 const config = {
     server: {
@@ -71,6 +80,9 @@ const config = {
         // Optional second domain (AD2_*) that receives the same password on every change and reset.
         // Users are matched by sAMAccountName; sign-in and admin rights always use the first domain.
         secondary: process.env.AD2_URL || process.env.AD2_SERVER ? buildAdConfig('AD2', 'Secondary domain') : null,
+        // Shown before the username on the sign-in and reset pages (DOMAIN\). AD_SIGNIN_DOMAIN=none hides it;
+        // unset = the first DC= of AD_BASE_DN in capitals
+        signInDomain: signInDomain(process.env.AD_SIGNIN_DOMAIN, process.env.AD_BASE_DN),
     },
 
     pg: {

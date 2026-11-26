@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Reset Password — AD Password Portal</title>
     <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/css/styles.css?v=20261119">
+    <link rel="stylesheet" href="/css/styles.css?v=20261120b">
 </head>
 <body>
     <div class="app-container">
@@ -46,20 +46,29 @@
                 <section id="step2" class="hidden">
                     <p class="text-sm text-muted mb-4 text-center">Choose how you want to verify your identity.</p>
                     <div class="method-cards">
-                        <button type="button" class="method-card hidden" data-method="security_questions">
-                            <div class="method-card-title">Security Questions</div>
-                            <div class="method-card-description">Answer the questions you set up during enrollment.</div>
-                            <div class="method-card-note hidden">Only works if you set this up during enrollment.</div>
+                        <button type="button" class="method-card has-icon hidden" data-method="security_questions">
+                            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7"/><path d="M12 17h.01"/></svg>
+                            <span class="method-card-body">
+                                <span class="method-card-title">Security Questions</span>
+                                <span class="method-card-description">Answer the questions you set up during enrollment.</span>
+                                <span class="method-card-note hidden">Only works if you set this up during enrollment.</span>
+                            </span>
                         </button>
-                        <button type="button" class="method-card hidden" data-method="totp">
-                            <div class="method-card-title">Authenticator App</div>
-                            <div class="method-card-description">Enter the 6-digit code from your authenticator app.</div>
-                            <div class="method-card-note hidden">Only works if you set this up during enrollment.</div>
+                        <button type="button" class="method-card has-icon hidden" data-method="totp">
+                            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 2h6a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M11 18h2"/></svg>
+                            <span class="method-card-body">
+                                <span class="method-card-title">Authenticator App</span>
+                                <span class="method-card-description">Enter the 6-digit code shown in your authenticator app.</span>
+                                <span class="method-card-note hidden">Only works if you set this up during enrollment.</span>
+                            </span>
                         </button>
-                        <button type="button" class="method-card hidden" data-method="sms">
-                            <div class="method-card-title">Text Message</div>
-                            <div class="method-card-description" id="smsMethodHint">We text a 6-digit code to your mobile number.</div>
-                            <div class="method-card-note hidden">Only works if you set this up during enrollment.</div>
+                        <button type="button" class="method-card has-icon hidden" data-method="sms">
+                            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16v11H9l-5 4z"/></svg>
+                            <span class="method-card-body">
+                                <span class="method-card-title">Text Message</span>
+                                <span class="method-card-description" id="smsMethodHint">We text a 6-digit code to your mobile number.</span>
+                                <span class="method-card-note hidden">Only works if you set this up during enrollment.</span>
+                            </span>
                         </button>
                     </div>
                     <div class="btn-row space-between">
@@ -109,10 +118,10 @@
                             <input class="form-input otp-input" type="text" id="smsCode" inputmode="numeric"
                                    autocomplete="one-time-code" maxlength="6" placeholder="000000">
                             <div class="form-error"></div>
+                            <p class="resend-line">Didn't get it? <button type="button" class="btn-link" id="smsResendBtn">Resend code</button></p>
                         </div>
                         <div class="btn-row space-between">
                             <button type="button" class="btn btn-ghost" data-back="2">&larr; Back</button>
-                            <button type="button" class="btn btn-ghost" id="smsResendBtn">Resend code</button>
                             <button type="submit" class="btn btn-primary" id="smsBtn">Verify Code</button>
                         </div>
                     </form>
@@ -120,9 +129,12 @@
 
                 <!-- Step 4: New password -->
                 <section id="step4" class="hidden">
-                    <div class="alert alert-info">
-                        <span>Identity verified. Set your new password within <strong id="countdown">10:00</strong>.</span>
+                    <div class="step-head">
+                        <h2 class="step-head-title">Choose a new password</h2>
+                        <span class="timer-chip" id="countdownChip" role="timer"><span class="sr-only">Time left: </span><span id="countdown">10:00</span></span>
                     </div>
+                    <p class="text-sm text-muted mb-4">Identity verified. Set your new password before the timer runs out.</p>
+                    <p class="sr-only" id="countdownAnnounce" aria-live="polite"></p>
                     <form id="pwForm" novalidate>
                         <div class="form-group">
                             <label class="form-label" for="newPassword">New password</label>
@@ -141,9 +153,9 @@
                                 <li data-req="digit">Number</li>
                                 <li data-req="symbol">Special character</li>
                                 <li data-req="noname">Does not contain your username or name</li>
+                                <li class="req-later hidden" data-policy-note="history"></li>
                             </ul>
                             <p class="form-hint" data-complexity-only>Must include 3 of the 4 character types.</p>
-                            <p class="form-hint hidden" data-policy-note="history"></p>
                             <div class="form-error"></div>
                         </div>
                         <div class="form-group">
@@ -152,6 +164,9 @@
                                 <input class="form-input" type="password" id="confirmPassword" autocomplete="new-password" maxlength="256">
                                 <button type="button" class="password-toggle" aria-label="Show password">Show</button>
                             </div>
+                            <ul class="req-list req-list-stack" id="matchList">
+                                <li data-req="match">Matches the new password</li>
+                            </ul>
                             <div class="form-error"></div>
                         </div>
                         <button type="submit" class="btn btn-primary btn-block" id="pwBtn">Reset Password</button>
@@ -163,9 +178,9 @@
                     <div class="empty-state empty-state-compact">
                         <div class="empty-state-icon" aria-hidden="true"></div>
                         <h2 class="empty-state-title">Password reset</h2>
-                        <p class="empty-state-text">Your Active Directory password has been updated. You can now sign in with your new password.</p>
+                        <p class="empty-state-text">You can now sign in with your new password.</p>
                     </div>
-                    <div id="doneUnlocked" class="alert alert-info hidden text-left" role="status">Your account was locked out and has been unlocked as well.</div>
+                    <ul class="done-list" id="doneList" aria-label="What changed"></ul>
                     <div id="doneSyncWarning" class="alert alert-warning hidden text-left" role="alert"></div>
                     <a href="/index.html" class="btn btn-primary btn-lg">Go to Sign In</a>
                 </section>
@@ -177,7 +192,7 @@
         </main>
     </div>
 
-    <script src="/js/app.js?v=20261119"></script>
-    <script src="/js/reset.js?v=20261119"></script>
+    <script src="/js/app.js?v=20261120b"></script>
+    <script src="/js/reset.js?v=20261120"></script>
 </body>
 </html>

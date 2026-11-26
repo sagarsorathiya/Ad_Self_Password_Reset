@@ -14,7 +14,7 @@
 
     --color-text: #1d2733;
     --color-text-secondary: #4a5563;
-    --color-text-muted: #6b7584;
+    --color-text-muted: #5b6472;
 
     /* Brand */
     --color-primary: #c2410c;
@@ -943,3 +943,324 @@ button.method-card {
 /* Policy reasons under a refused new password (showPasswordError) */
 .form-error .policy-problems { margin: var(--space-1) 0 0; padding-left: 1.25rem; }
 .form-error .policy-problems li { margin-bottom: 2px; }
+
+/* ==========================================================================
+   Design improvements: status cards, rule states, dropdowns, admin tables
+   ========================================================================== */
+
+/* User forms: 15px text, 16px inputs/labels/buttons (also stops iOS zoom on focus) */
+.card-auth,
+.card-form { font-size: 0.9375rem; }
+.card-auth .form-input,
+.card-auth .form-label,
+.card-auth .btn,
+.card-form .form-input,
+.card-form .form-label,
+.card-form .btn { font-size: var(--font-size-lg); }
+.card-auth .btn,
+.card-form .btn { height: 44px; }
+.card-auth .btn-lg,
+.card-form .btn-lg { height: 48px; }
+.card-auth .form-hint,
+.card-form .form-hint,
+.card-auth .req-list li,
+.card-form .req-list li { font-size: var(--font-size-base); }
+
+/* Text-only button (resend, secondary actions) */
+.btn-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0;
+    font-family: var(--font-family);
+    font-size: inherit;
+    font-weight: 600;
+    color: var(--color-primary);
+    background: none;
+    border: none;
+    cursor: pointer;
+}
+.btn-link:hover:not(:disabled) { color: var(--color-primary-hover); text-decoration: underline; }
+.btn-link:disabled { color: var(--color-text-muted); cursor: default; font-weight: 400; }
+.resend-line { margin-top: var(--space-2); font-size: var(--font-size-base); color: var(--color-text-secondary); }
+
+/* Username with a fixed domain prefix (DOMAIN\) */
+.input-group { display: flex; align-items: stretch; }
+.input-prefix {
+    display: flex;
+    align-items: center;
+    padding: 0 var(--space-3);
+    font-family: var(--font-mono);
+    color: var(--color-text-secondary);
+    background: var(--color-surface-muted);
+    border: 1px solid var(--color-border-strong);
+    border-right: none;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    white-space: nowrap;
+}
+.input-group .form-input { border-radius: 0 var(--radius-md) var(--radius-md) 0; min-width: 0; flex: 1 1 auto; }
+
+/* Expired-password panel on the sign-in page */
+.expired-panel { display: flex; flex-direction: column; gap: var(--space-4); }
+.expired-panel-title { font-size: var(--font-size-2xl); font-weight: 600; }
+.expired-panel-title:focus { outline: none; }
+.expired-panel-text { color: var(--color-text-secondary); line-height: 1.55; }
+.expired-panel-note { font-size: var(--font-size-base); color: var(--color-text-secondary); border-top: 1px solid var(--color-border); padding-top: var(--space-4); }
+.expired-panel .btn-link { align-self: center; min-height: 44px; }
+.panel-icon { width: 36px; height: 36px; color: var(--color-warning); }
+
+/* Inline line icons (built with createElementNS or in markup) */
+.icon { width: 24px; height: 24px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Reset method cards with an icon */
+.method-card.has-icon { display: flex; gap: var(--space-3); align-items: flex-start; }
+.method-card.has-icon .icon { color: var(--color-text-secondary); margin-top: 1px; }
+.method-card.has-icon:hover .icon,
+.method-card.has-icon.selected .icon { color: var(--color-primary-hover); }
+.method-card-body { display: flex; flex-direction: column; min-width: 0; }
+
+/* Step heading with the reset timer on the right */
+.step-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-4); }
+.step-head-title { font-size: var(--font-size-xl); font-weight: 600; }
+.timer-chip {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    padding: 2px var(--space-2);
+    color: var(--color-text-secondary);
+    background: var(--color-surface-muted);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+}
+.timer-chip.low { color: var(--color-warning); background: var(--color-warning-bg); border-color: var(--color-warning-border); }
+
+/* Password rules: pending (hollow), met (filled check), failed (cross) - shape differs, not only colour */
+.req-list li::before { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; font-size: 11px; font-weight: 700; line-height: 1; }
+.req-list li.met { color: var(--color-text); }
+.req-list li.met::before { content: '\2713'; color: #fff; background: var(--color-success); border-color: var(--color-success); box-shadow: none; }
+.req-list li.failed { color: var(--color-error); }
+.req-list li.failed::before { content: '\00d7'; color: #fff; background: var(--color-error); border-color: var(--color-error); border-radius: var(--radius-sm); font-size: 13px; }
+.req-list li.req-later { color: var(--color-text-secondary); }
+.req-list li.req-later::before { border-style: dashed; }
+.req-list.req-list-stack { grid-template-columns: minmax(0, 1fr); }
+
+/* Reset done summary */
+.done-list { list-style: none; display: flex; flex-direction: column; gap: var(--space-2); margin: 0 auto var(--space-6); max-width: 420px; text-align: left; }
+.done-list li { display: flex; gap: var(--space-3); align-items: flex-start; }
+.done-list li::before {
+    content: '\2713';
+    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+    width: 18px; height: 18px; margin-top: 2px;
+    font-size: 11px; font-weight: 700; color: #fff;
+    background: var(--color-success); border-radius: 50%;
+}
+.done-list li.done-failed::before { content: '!'; background: var(--color-warning); border-radius: var(--radius-sm); }
+
+/* Dashboard: status band and method rows */
+.status-band { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-bottom: var(--space-6); }
+.status-card {
+    flex: 1 1 320px;
+    display: flex;
+    gap: var(--space-4);
+    align-items: flex-start;
+    padding: var(--space-5) var(--space-6);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+}
+.status-card .icon { width: 28px; height: 28px; }
+.status-card-body { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.status-card-kicker { font-size: var(--font-size-sm); font-weight: 600; }
+.status-card-title { font-size: var(--font-size-xl); font-weight: 600; }
+.status-card-text { font-size: var(--font-size-base); color: var(--color-text-secondary); }
+.status-card .btn { align-self: center; height: 44px; }
+.status-card.tone-success { border-color: var(--color-success-border); }
+.status-card.tone-success .icon,
+.status-card.tone-success .status-card-kicker { color: var(--color-success); }
+.status-card.tone-warning { border-color: var(--color-warning-border); }
+.status-card.tone-warning .icon,
+.status-card.tone-warning .status-card-kicker { color: var(--color-warning); }
+.status-card.tone-neutral .icon,
+.status-card.tone-neutral .status-card-kicker { color: var(--color-text-secondary); }
+
+.dashboard-layout { display: flex; flex-wrap: wrap; gap: var(--space-5); align-items: flex-start; }
+.dashboard-main { flex: 999 1 560px; min-width: 0; }
+.dashboard-side { flex: 1 1 300px; display: flex; flex-direction: column; gap: var(--space-5); }
+.dashboard-card-note { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.method-rows { list-style: none; }
+.method-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-4);
+    padding: var(--space-4) 0;
+    border-bottom: 1px solid #edf0f3;
+}
+.method-row:first-child { padding-top: 0; }
+.method-row:last-child { border-bottom: none; padding-bottom: 0; }
+.method-row-body { flex: 1 1 240px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.method-row-name { font-weight: 600; }
+.method-row-detail { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.method-row .btn { height: 40px; }
+.info-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-4); font-size: var(--font-size-base); }
+.info-list dt { color: var(--color-text-secondary); }
+.info-list dd { font-weight: 600; overflow-wrap: anywhere; }
+.help-card { background: var(--color-surface-muted); }
+
+/* Loading skeleton (no animation) */
+.skeleton { display: flex; flex-direction: column; gap: var(--space-5); }
+.skeleton-row { display: flex; flex-wrap: wrap; gap: var(--space-4); }
+.skeleton-card {
+    flex: 1 1 320px;
+    height: 96px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+}
+.skeleton-card.tall { height: 240px; }
+.skeleton-bar { display: block; height: 12px; margin: var(--space-5) var(--space-6) 0; border-radius: 2px; background: #e6e9ee; }
+.skeleton-bar.short { width: 40%; }
+.skeleton-bar.long { width: 70%; }
+
+/* Admin: stat cards are filter buttons */
+button.stat-card { width: 100%; text-align: left; font-family: var(--font-family); color: var(--color-text); cursor: pointer; }
+button.stat-card:hover { border-color: var(--color-border-strong); background: var(--color-surface-hover); }
+button.stat-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+button.stat-card[aria-pressed="true"] { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary); }
+
+/* Admin: long tables keep their headers */
+.table-container { max-height: 70vh; overflow: auto; }
+.data-table thead th { position: sticky; top: 0; z-index: 1; }
+.users-table thead th:last-child { z-index: 2; }
+/* Pagination sits inside the scroll box: keep it in view at the bottom */
+.table-container > .pagination { position: sticky; bottom: 0; left: 0; z-index: 1; background: var(--color-surface); }
+.data-table.density-compact th,
+.data-table.density-compact td { padding-top: var(--space-1); padding-bottom: var(--space-1); }
+.density-toggle .filter-tab { height: 30px; }
+
+/* Admin: cards holding protected settings */
+.protected-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: var(--space-2);
+    padding: 1px var(--space-2);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    vertical-align: middle;
+    color: var(--color-primary-active);
+    background: var(--color-primary-subtle);
+    border: 1px solid var(--color-primary);
+    border-radius: var(--radius-sm);
+}
+.protected-chip .icon { width: 12px; height: 12px; }
+.protected-note { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-bottom: var(--space-4); }
+
+@media (max-width: 640px) {
+    .status-card { flex-wrap: wrap; }
+    .status-card .btn { width: 100%; }
+}
+
+/* --- Custom dropdowns (enhanceSelect in app.js) --- */
+.cselect { position: relative; width: 100%; }
+.cselect-auto { display: inline-block; width: auto; }
+.cselect-native {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0 !important;
+    opacity: 0;
+    pointer-events: none;
+}
+.cselect-button {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 36px;
+    padding: 0 var(--space-3);
+    font-family: var(--font-family);
+    font-size: var(--font-size-base);
+    color: var(--color-text);
+    text-align: left;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: border-color var(--transition), box-shadow var(--transition);
+}
+.cselect-button:hover:not(:disabled) { border-color: #8f99a6; }
+.cselect-button:focus-visible,
+.cselect.open .cselect-button { outline: none; border-color: var(--color-primary); box-shadow: var(--focus-ring); }
+.cselect-button:disabled { background: var(--color-surface-muted); color: var(--color-text-muted); cursor: not-allowed; }
+.cselect-button.error { border-color: var(--color-error); }
+.cselect-face { display: grid; flex: 1 1 auto; min-width: 0; }
+.cselect-value,
+.cselect-sizer > span { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cselect-sizer { display: contents; }
+.cselect-sizer > span { visibility: hidden; height: 0; }
+.cselect:not(.cselect-auto) .cselect-sizer { display: none; }
+.cselect-value.cselect-placeholder { color: var(--color-text-muted); }
+.cselect-chevron {
+    width: 8px;
+    height: 8px;
+    margin: -4px 2px 0 0;
+    flex-shrink: 0;
+    border-right: 2px solid var(--color-text-secondary);
+    border-bottom: 2px solid var(--color-text-secondary);
+    transform: rotate(45deg);
+    transition: transform var(--transition);
+}
+.cselect.open .cselect-chevron { transform: rotate(-135deg); margin-top: 4px; }
+
+.cselect-list {
+    position: fixed;
+    z-index: 6000;
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    overflow-y: auto;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    font-family: var(--font-family);
+    font-size: var(--font-size-base);
+}
+.cselect-option {
+    position: relative;
+    padding: var(--space-2) var(--space-8) var(--space-2) var(--space-3);
+    color: var(--color-text);
+    line-height: 1.4;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+.cselect-option.active { background: var(--color-surface-hover); }
+.cselect-option[aria-selected="true"] { font-weight: 600; color: var(--color-primary-active); background: var(--color-primary-subtle); }
+.cselect-option[aria-selected="true"].active { background: #ffead4; }
+.cselect-option[aria-selected="true"]::after {
+    content: '';
+    position: absolute;
+    right: var(--space-3);
+    top: 50%;
+    width: 5px;
+    height: 10px;
+    margin-top: -7px;
+    border-right: 2px solid var(--color-primary);
+    border-bottom: 2px solid var(--color-primary);
+    transform: rotate(45deg);
+}
+.cselect-option[aria-disabled="true"] { color: var(--color-text-muted); cursor: not-allowed; background: none; }
+.cselect-option.cselect-placeholder { color: var(--color-text-muted); }
+.cselect-list::-webkit-scrollbar { width: 10px; }
+.cselect-list::-webkit-scrollbar-thumb { background: var(--color-border-strong); border-radius: 5px; border: 2px solid var(--color-surface); }
+
+/* Larger on the user forms, like the other inputs there */
+.card-auth .cselect-button,
+.card-form .cselect-button { min-height: 44px; font-size: var(--font-size-lg); }
